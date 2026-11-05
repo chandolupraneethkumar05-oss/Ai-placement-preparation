@@ -1,8 +1,12 @@
 import os
 import random
-from typing import Optional
+from typing import Optional, List
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from app.ai_engine.gemini_service import (
+    generate_dynamic_interview_question,
+    evaluate_dynamic_interview_answer
+)
 
 PYQ_KNOWLEDGE_BASE = [
     # ================= 1. REASONING & APTITUDE ROUND =================
@@ -154,49 +158,77 @@ PYQ_KNOWLEDGE_BASE = [
     }
 ]
 
-def fetch_pyq_for_company(company_name: str, round_category: Optional[str] = None) -> dict:
-    pool = PYQ_KNOWLEDGE_BASE
-    
-    # 1. STRICT ROUND FILTERING: If a specific round is selected, pool ONLY that round!
+def fetch_pyq_for_company(
+    company_name: str, 
+    round_category: Optional[str] = None,
+    exclude_titles: Optional[List[str]] = None,
+    api_key: Optional[str] = None,
+    target_role: Optional[str] = "Software Engineer"
+) -> dict:
+    rc_clean = "technical"
     if round_category:
         rc = round_category.strip().lower()
-        # Normalize synonyms
         if "reason" in rc or "aptitude" in rc or "round 1" in rc or "round1" in rc:
-            rc = "reasoning"
+            rc_clean = "reasoning"
         elif "code" in rc or "coding" in rc or "algo" in rc or "round 2" in rc or "round2" in rc:
-            rc = "coding"
+            rc_clean = "coding"
         elif "tech" in rc or "system" in rc or "design" in rc or "round 3" in rc or "round3" in rc:
-            rc = "technical"
+            rc_clean = "technical"
         elif "hr" in rc or "behavior" in rc or "round 4" in rc or "round4" in rc:
-            rc = "behavioral"
+            rc_clean = "behavioral"
 
-        filtered_by_round = [q for q in pool if q.get("round_category") == rc]
-        if filtered_by_round:
-            pool = filtered_by_round
+    # 1. ATTEMPT DYNAMIC GENERATION VIA GEMINI AI (If API key available)
+    if api_key or os.getenv("GEMINI_API_KEY"):
+        dynamic_q = generate_dynamic_interview_question(
+            company=company_name,
+            round_type=rc_clean,
+            target_role=target_role,
+            exclude_titles=exclude_titles,
+            api_key=api_key
+        )
+        if dynamic_q:
+            return dynamic_q
 
-    # 2. Company preference match within the selected round pool
+    # 2. DETERMINISTIC DEDUPLICATED RAG FALLBACK
+    pool = PYQ_KNOWLEDGE_BASE
+    filtered_by_round = [q for q in pool if q.get("round_category") == rc_clean]
+    if filtered_by_round:
+        pool = filtered_by_round
+
+    # Company preference match within the selected round pool
     matches = [q for q in pool if q["company"].lower() in company_name.lower()]
-    chosen = random.choice(matches) if matches else random.choice(pool)
+    target_candidates = matches if matches else pool
+
+    # STRICT ANTI-DUPLICATION: Exclude previously presented questions
+    excluded = set(t.strip().lower() for t in (exclude_titles or []))
+    unseen_candidates = [q for q in target_candidates if q["title"].strip().lower() not in excluded]
+
+    if unseen_candidates:
+        chosen = random.choice(unseen_candidates)
+    else:
+        chosen = random.choice(target_candidates)
     
-    # Pick either base question or variation
-    question_text = random.choice([chosen["question"]] + chosen.get("variations", []))
+    # Pick either base question or a fresh variation not in excluded list
+    all_options = [chosen["question"]] + chosen.get("variations", [])
+    fresh_options = [opt for opt in all_options if opt.strip().lower() not in excluded]
+    question_text = random.choice(fresh_options) if fresh_options else random.choice(all_options)
+
     return {
         "company": chosen["company"],
         "role": chosen["role"],
-        "round_category": chosen.get("round_category", "technical"),
-        "round_label": chosen.get("round_label", "Interview Assessment"),
+        "round_category": chosen.get("round_category", rc_clean),
+        "round_label": chosen.get("round_label", f"{chosen['company']} Assessment"),
         "title": chosen["title"],
         "question": question_text,
         "required_concepts": chosen["required_concepts"],
-        "benchmark_summary": chosen["benchmark_summary"]
+        "benchmark_summary": chosen["benchmark_summary"],
+        "ai_powered": False
     }
 
-def evaluate_pyq_response(question_data: dict, student_answer: str) -> dict:
+def evaluate_pyq_response(question_data: dict, student_answer: str, api_key: Optional[str] = None) -> dict:
     """
-    Evaluates student response against the RAG Concept Rubric:
-    - Calculates concept hit rate
-    - Computes TF-IDF semantic similarity against gold standard
-    - Synthesizes dynamic, non-hardcoded actionable feedback
+    Evaluates candidate's answer using Gemini API if key is present;
+    otherwise falls back to institutional Concept Rubric + TF-IDF semantic scoring.
     """
     ans_clean = student_answer.strip().lower()
     if len(ans_clean) < 20:
@@ -205,18 +237,25 @@ def evaluate_pyq_response(question_data: dict, student_answer: str) -> dict:
             "verdict": "Insufficient Detail",
             "concept_coverage_percent": 15,
             "matched_concepts": [],
-            "missing_concepts": question_data["required_concepts"][:4],
-            "feedback": "Your answer is too brief for an interview panel. Explain the underlying reasoning, complexity trade-offs, and methodology in depth."
+            "missing_concepts": question_data.get("required_concepts", [])[:4],
+            "feedback": "Your answer is too brief for a campus interview panel. Explain the underlying reasoning, complexity trade-offs, and methodology in depth."
         }
 
-    # 1. Concept Rubric Matching
-    req_concepts = question_data["required_concepts"]
+    # 1. ATTEMPT EVALUATION WITH GEMINI API
+    if api_key or os.getenv("GEMINI_API_KEY"):
+        gemini_eval = evaluate_dynamic_interview_answer(question_data, student_answer, api_key=api_key)
+        if gemini_eval:
+            gemini_eval["ai_evaluator"] = "Google Gemini 2.5/1.5 Flash"
+            return gemini_eval
+
+    # 2. LOCAL CONCEPT RUBRIC + TF-IDF SEMANTIC SCORING FALLBACK
+    req_concepts = question_data.get("required_concepts", [])
     matched = [c for c in req_concepts if c in ans_clean]
     missing = [c for c in req_concepts if c not in ans_clean]
-    coverage_pct = int(round((len(matched) / len(req_concepts)) * 100))
+    coverage_pct = int(round((len(matched) / max(1, len(req_concepts))) * 100))
 
-    # 2. TF-IDF Semantic Similarity
-    corpus = [ans_clean, question_data["benchmark_summary"].lower()]
+    benchmark = question_data.get("benchmark_summary", "")
+    corpus = [ans_clean, benchmark.lower()]
     sim_score = 50
     try:
         vec = TfidfVectorizer(stop_words="english")
@@ -229,7 +268,6 @@ def evaluate_pyq_response(question_data: dict, student_answer: str) -> dict:
     final_score = int(round(0.6 * coverage_pct + 0.4 * sim_score))
     final_score = max(35, min(96, final_score))
 
-    # 3. Dynamic Feedback Generation
     feedback_points = []
     if matched:
         feedback_points.append(f"Strong demonstration of core principles: {', '.join(matched[:3])}.")
@@ -240,9 +278,10 @@ def evaluate_pyq_response(question_data: dict, student_answer: str) -> dict:
 
     return {
         "score": final_score,
-        "verdict": "Interview Ready" if final_score >= 75 else "Needs Revision",
+        "verdict": "Interview Ready" if final_score >= 75 else "Needs Polish" if final_score >= 55 else "Needs Revision",
         "concept_coverage_percent": coverage_pct,
         "matched_concepts": matched,
         "missing_concepts": missing,
-        "feedback": feedback_text
+        "feedback": feedback_text,
+        "ai_evaluator": "VFSTR Institutional Rubric Engine"
     }

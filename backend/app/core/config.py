@@ -12,3 +12,4 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'vfstr-hackathon-2026-super-secret-key-agen
 ALGORITHM = 'HS256'
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 FRONTEND_URL = os.getenv('FRONTEND_URL', '*')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()

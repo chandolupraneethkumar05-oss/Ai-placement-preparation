@@ -171,10 +171,18 @@ export async function fetchShortlistedInterviews(studentId: number) {
   return res.json();
 }
 
-export async function fetchMockQuestion(companyName: string, roundType?: string, studentId?: number) {
+export async function fetchMockQuestion(
+  companyName: string, 
+  roundType?: string, 
+  studentId?: number,
+  excludeTitles?: string[],
+  apiKey?: string
+) {
   const params = new URLSearchParams();
   if (roundType) params.append("round_type", roundType);
   if (studentId) params.append("student_id", String(studentId));
+  if (excludeTitles && excludeTitles.length > 0) params.append("exclude", excludeTitles.join(","));
+  if (apiKey) params.append("api_key", apiKey.trim());
   const query = params.toString() ? `?${params.toString()}` : '';
   const res = await fetch(`${API_BASE}/student/mock-interview/${encodeURIComponent(companyName)}${query}`, {
     headers: getAuthHeaders()
@@ -186,13 +194,49 @@ export async function fetchMockQuestion(companyName: string, roundType?: string,
   return res.json();
 }
 
-export async function submitMockAnswer(payload: any) {
+export async function submitMockAnswer(payload: {
+  company_name: string;
+  question_title: string;
+  question_text: string;
+  required_concepts: string[];
+  benchmark_summary: string;
+  student_answer: string;
+  api_key?: string;
+}) {
   const res = await fetch(`${API_BASE}/student/evaluate-mock`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(payload)
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Evaluation failed");
+  }
   return res.json();
+}
+
+export async function optimizeResumeBullet(bulletText: string, targetRole?: string, apiKey?: string) {
+  const res = await fetch(`${API_BASE}/student/optimize-bullet`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ bullet_text: bulletText, target_role: targetRole, api_key: apiKey })
+  });
+  return res.json();
+}
+
+export async function fetchHallTicket(studentId: number, applicationId: number) {
+  const res = await fetch(`${API_BASE}/student/hall-ticket/${studentId}/${applicationId}`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to load hall ticket");
+  }
+  return res.json();
+}
+
+export function getPlacementCsvDownloadUrl(): string {
+  return `${API_BASE}/admin/export-placement-csv`;
 }
 
 export async function fetchRoadmap(studentId: number, jobId: number) {

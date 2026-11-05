@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { PYQMockQuestion } from '../types';
 import { fetchMockQuestion, submitMockAnswer } from '../api';
-import { Sparkles, CheckCircle2, Clock, X, Send, BrainCircuit, Code2, Server, Users, Lock, ShieldAlert, Building2 } from 'lucide-react';
+import { Sparkles, CheckCircle2, Clock, X, Send, BrainCircuit, Code2, Server, Users, Lock, ShieldAlert, Building2, Key, RefreshCw, Bot } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
@@ -60,6 +60,12 @@ export const MockInterviewModal: React.FC<Props> = ({
   const [submitting, setSubmitting] = useState(false);
   const [evaluation, setEvaluation] = useState<any>(null);
 
+  // Gemini AI Key & Non-Repeating Questions state
+  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem("gemini_api_key") || "");
+  const [showKeyDrawer, setShowKeyDrawer] = useState<boolean>(false);
+  const [keyInput, setKeyInput] = useState<string>(apiKey);
+  const [askedTitles, setAskedTitles] = useState<string[]>([]);
+
   useEffect(() => {
     if (initialCompany) {
       setActiveCompany(initialCompany);
@@ -68,21 +74,41 @@ export const MockInterviewModal: React.FC<Props> = ({
     }
   }, [initialCompany, shortlistedCompanies]);
 
-  const loadQuestion = (company: string, round: AssessmentRound) => {
+  const loadQuestion = (company: string, round: AssessmentRound, customExclude?: string[]) => {
     if (!company) return;
     setLoading(true);
     setEvaluation(null);
     setErrorNotice(null);
     setAnswer('');
-    fetchMockQuestion(company, round, studentId)
+    const currentExclude = customExclude || askedTitles;
+    fetchMockQuestion(company, round, studentId, currentExclude, apiKey)
       .then(data => {
         setQuestionData(data);
+        if (data.title && !currentExclude.includes(data.title)) {
+          setAskedTitles(prev => [...prev, data.title]);
+        }
         setLoading(false);
       })
       .catch(err => {
         setErrorNotice(err.message || `You must be shortlisted by ${company} to unlock this assessment.`);
         setLoading(false);
       });
+  };
+
+  const handleSaveApiKey = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanKey = keyInput.trim();
+    setApiKey(cleanKey);
+    if (cleanKey) {
+      localStorage.setItem("gemini_api_key", cleanKey);
+    } else {
+      localStorage.removeItem("gemini_api_key");
+    }
+    setShowKeyDrawer(false);
+    // Reload question with fresh Gemini API key
+    if (activeCompany) {
+      loadQuestion(activeCompany, selectedRound);
+    }
   };
 
   useEffect(() => {
@@ -107,11 +133,12 @@ export const MockInterviewModal: React.FC<Props> = ({
         question_text: questionData.question,
         required_concepts: questionData.required_concepts,
         benchmark_summary: questionData.benchmark_summary,
-        student_answer: answer
+        student_answer: answer,
+        api_key: apiKey || undefined
       });
       setEvaluation(res);
-    } catch (e) {
-      alert("Evaluation failed");
+    } catch (e: any) {
+      alert(e.message || "Evaluation failed");
     } finally {
       setSubmitting(false);
     }
@@ -141,10 +168,62 @@ export const MockInterviewModal: React.FC<Props> = ({
               Strict Placement Guardrail: Questions and practice rounds unlock solely for verified shortlisted candidates.
             </p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition">
-            <X size={22} />
-          </button>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setShowKeyDrawer(!showKeyDrawer)}
+              className={`text-xs font-bold px-3 py-1.5 rounded-xl border flex items-center space-x-1.5 transition ${
+                apiKey
+                  ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300'
+                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+              }`}
+            >
+              <Key size={13} />
+              <span>{apiKey ? "Gemini Key: Active" : "Add Gemini API Key"}</span>
+            </button>
+            <button onClick={onClose} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition">
+              <X size={22} />
+            </button>
+          </div>
         </div>
+
+        {/* GEMINI AI KEY SETTINGS DRAWER */}
+        {showKeyDrawer && (
+          <form onSubmit={handleSaveApiKey} className="bg-slate-900 border-b border-blue-900/50 p-4 text-xs text-white flex flex-col sm:flex-row items-center gap-3 animate-in slide-in-from-top-2">
+            <div className="flex items-center space-x-2 flex-1 w-full">
+              <Key size={15} className="text-blue-400 shrink-0" />
+              <input
+                type="password"
+                placeholder="Paste Google Gemini API Key (e.g. AIzaSy...)"
+                value={keyInput}
+                onChange={e => setKeyInput(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs w-full text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <button
+                type="submit"
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition"
+              >
+                Save & Apply Key
+              </button>
+              {apiKey && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setKeyInput("");
+                    setApiKey("");
+                    localStorage.removeItem("gemini_api_key");
+                    setShowKeyDrawer(false);
+                    if (activeCompany) loadQuestion(activeCompany, selectedRound, []);
+                  }}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold px-3 py-2 rounded-xl text-xs transition"
+                >
+                  Clear Key
+                </button>
+              )}
+            </div>
+          </form>
+        )}
 
         {/* LOCKED SCREEN FOR NON-SHORTLISTED STUDENTS */}
         {isLocked ? (
@@ -256,18 +335,37 @@ export const MockInterviewModal: React.FC<Props> = ({
                         <Clock size={14} />
                         <span>Active Challenge: {activeRoundMeta.name}</span>
                       </div>
-                      <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full">
-                        Strict Domain: {selectedRound.toUpperCase()}
-                      </span>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-[10px] font-bold bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full">
+                          Domain: {selectedRound.toUpperCase()}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => loadQuestion(activeCompany, selectedRound, [...askedTitles, questionData.title])}
+                          className="text-[11px] font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 px-2.5 py-1 rounded-xl flex items-center space-x-1 shadow-sm transition"
+                          title="Generate a completely different question without repeating"
+                        >
+                          <RefreshCw size={11} className={loading ? "animate-spin" : ""} />
+                          <span>Next Question (No Repeat)</span>
+                        </button>
+                      </div>
                     </div>
 
                     <div className="text-sm font-extrabold text-slate-900 leading-relaxed bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                       {questionData.question}
                     </div>
 
-                    <div className="text-[11px] text-slate-500 flex items-center space-x-1">
-                      <Sparkles size={12} className="text-amber-500" />
-                      <span><b>Evaluation Focus:</b> {activeRoundMeta.desc}</span>
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center text-[11px] text-slate-500 gap-2">
+                      <div className="flex items-center space-x-1">
+                        <Sparkles size={12} className="text-amber-500" />
+                        <span><b>Evaluation Rubric:</b> {activeRoundMeta.desc}</span>
+                      </div>
+                      {apiKey && (
+                        <div className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center space-x-1">
+                          <Bot size={11} />
+                          <span>Gemini AI Connected</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -276,7 +374,14 @@ export const MockInterviewModal: React.FC<Props> = ({
                     <div className="bg-emerald-50/70 border-2 border-emerald-300 rounded-2xl p-6 space-y-4">
                       <div className="flex justify-between items-center">
                         <div>
-                          <span className="text-xs font-bold text-emerald-800 uppercase">AI Evaluation Score</span>
+                          <div className="flex items-center space-x-2">
+                            <span className="text-xs font-bold text-emerald-800 uppercase">AI Evaluation Score</span>
+                            {evaluation.ai_evaluator && (
+                              <span className="text-[10px] font-bold bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-md">
+                                {evaluation.ai_evaluator}
+                              </span>
+                            )}
+                          </div>
                           <div className="text-3xl font-black text-emerald-600 mt-0.5">{evaluation.score} / 100</div>
                         </div>
                         <span className="bg-emerald-200 text-emerald-900 text-xs font-bold px-3 py-1.5 rounded-full">
@@ -286,17 +391,33 @@ export const MockInterviewModal: React.FC<Props> = ({
 
                       <div className="space-y-2 text-xs">
                         <div className="font-bold text-slate-900">Concept Coverage: {evaluation.concept_coverage_percent}%</div>
-                        <p className="text-slate-700 bg-white/80 p-3 rounded-xl border border-emerald-200 leading-relaxed">
+                        <p className="text-slate-700 bg-white/90 p-3.5 rounded-xl border border-emerald-200 leading-relaxed">
                           {evaluation.feedback}
                         </p>
+                        {evaluation.model_tips && (
+                          <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl text-blue-950 space-y-1">
+                            <div className="font-bold flex items-center space-x-1 text-blue-900">
+                              <Sparkles size={12} className="text-blue-600" />
+                              <span>Model Interview Preparation Takeaways:</span>
+                            </div>
+                            <div className="text-slate-700 leading-relaxed whitespace-pre-line">{evaluation.model_tips}</div>
+                          </div>
+                        )}
                       </div>
 
-                      <div className="flex justify-end pt-2">
+                      <div className="flex justify-between items-center pt-2">
                         <button
                           onClick={() => setEvaluation(null)}
-                          className="text-xs font-bold text-blue-700 hover:underline"
+                          className="text-xs font-bold text-slate-600 hover:text-slate-900"
                         >
-                          Retry Question
+                          Revise Answer
+                        </button>
+                        <button
+                          onClick={() => loadQuestion(activeCompany, selectedRound, [...askedTitles, questionData.title])}
+                          className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center space-x-1.5 transition shadow"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Attempt Next Non-Repeating Challenge</span>
                         </button>
                       </div>
                     </div>

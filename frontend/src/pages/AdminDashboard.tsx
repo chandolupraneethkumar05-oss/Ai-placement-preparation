@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { UserSession } from '../types';
-import { fetchAdminAnalytics, fetchNirfSummary, fetchAdminAllStudents } from '../api';
-import { Shield, FileDown, Award, Users, Search, Briefcase } from 'lucide-react';
+import { fetchAdminAnalytics, fetchNirfSummary, fetchAdminAllStudents, getPlacementCsvDownloadUrl } from '../api';
+import { Shield, FileDown, Award, Users, Search, Briefcase, Download, Table } from 'lucide-react';
 
 interface Props {
   session: UserSession;
@@ -49,13 +49,23 @@ export const AdminDashboard: React.FC<Props> = ({ session }) => {
           </p>
         </div>
 
-        <button
-          onClick={handleExportNirf}
-          className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs sm:text-sm px-5 py-3 rounded-2xl shadow-lg flex items-center space-x-2 transition"
-        >
-          <FileDown size={18} />
-          <span>Export NAAC / NIRF Summary</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <a
+            href={getPlacementCsvDownloadUrl()}
+            download="VFSTR_Institutional_Placement_Report_2026.csv"
+            className="bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs sm:text-sm px-4 py-3 rounded-2xl shadow-lg flex items-center space-x-2 transition"
+          >
+            <Download size={16} />
+            <span>Download CSV (Excel)</span>
+          </a>
+          <button
+            onClick={handleExportNirf}
+            className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs sm:text-sm px-5 py-3 rounded-2xl shadow-lg flex items-center space-x-2 transition"
+          >
+            <FileDown size={18} />
+            <span>Export NAAC / NIRF Summary</span>
+          </button>
+        </div>
       </div>
 
       {/* NIRF Report Modal / Preview */}

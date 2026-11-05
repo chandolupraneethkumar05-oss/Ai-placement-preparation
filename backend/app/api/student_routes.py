@@ -40,6 +40,7 @@ class SaveResumeBuilderRequest(BaseModel):
 class AIBulletEnhanceRequest(BaseModel):
     bullet_text: str
     target_role: Optional[str] = "Software Engineer"
+    api_key: Optional[str] = None
 
 class AISummaryRequest(BaseModel):
     name: str
@@ -58,6 +59,7 @@ class MockSubmissionRequest(BaseModel):
     required_concepts: List[str]
     benchmark_summary: str
     student_answer: str
+    api_key: Optional[str] = None
 
 @router.get("/profile/{student_id}")
 def get_student_profile(student_id: int, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
@@ -256,6 +258,11 @@ def save_resume_builder_data(student_id: int, req: SaveResumeBuilderRequest, db:
 
 @router.post("/resume-ai/enhance-bullet")
 def enhance_bullet(req: AIBulletEnhanceRequest):
+    from app.ai_engine.gemini_service import optimize_bullet_with_gemini
+    if req.api_key or os.getenv("GEMINI_API_KEY"):
+        gemini_res = optimize_bullet_with_gemini(req.bullet_text, req.target_role, api_key=req.api_key)
+        if gemini_res:
+            return gemini_res
     return ai_enhance_bullet(req.bullet_text, req.target_role or "Software Engineer")
 
 @router.post("/resume-ai/generate-summary")
@@ -481,12 +488,16 @@ def get_mock_interview(
     company_name: str, 
     round_type: Optional[str] = None, 
     student_id: Optional[int] = None, 
+    exclude: Optional[str] = None,
+    api_key: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    target_role = "Software Engineer"
     # STRICT GUARDRAIL: Candidate MUST be officially shortlisted by the company to unlock interview assessment!
     if student_id:
         profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
         if profile:
+            target_role = profile.target_role or "Software Engineer"
             is_shortlisted = any(
                 (app.job and app.job.company and app.job.company.name.lower() == company_name.lower()) and
                 ("shortlisted" in app.status.lower() or "confirmed" in app.status.lower())
@@ -498,7 +509,14 @@ def get_mock_interview(
                     detail=f"Strict Placement Guardrail: Technical Interview Assessment is locked. You must be shortlisted by {company_name} to access this assessment."
                 )
 
-    pyq = fetch_pyq_for_company(company_name, round_type)
+    exclude_list = [t.strip() for t in exclude.split(",") if t.strip()] if exclude else []
+    pyq = fetch_pyq_for_company(
+        company_name=company_name,
+        round_category=round_type,
+        exclude_titles=exclude_list,
+        api_key=api_key,
+        target_role=target_role
+    )
     return pyq
 
 @router.post("/evaluate-mock")
@@ -506,11 +524,65 @@ def evaluate_mock(req: MockSubmissionRequest):
     question_data = {
         "company": req.company_name,
         "title": req.question_title,
+        "question": req.question_text,
         "required_concepts": req.required_concepts,
         "benchmark_summary": req.benchmark_summary
     }
-    evaluation = evaluate_pyq_response(question_data, req.student_answer)
+    evaluation = evaluate_pyq_response(question_data, req.student_answer, api_key=req.api_key)
     return evaluation
+
+@router.post("/optimize-bullet")
+def optimize_bullet(req: AIBulletEnhanceRequest):
+    from app.ai_engine.gemini_service import optimize_bullet_with_gemini
+    # 1. Try Gemini STAR optimization if API key provided
+    if req.api_key or os.getenv("GEMINI_API_KEY"):
+        gemini_res = optimize_bullet_with_gemini(req.bullet_text, req.target_role, api_key=req.api_key)
+        if gemini_res:
+            return {"optimized_bullet": gemini_res, "engine": "Google Gemini STAR Optimizer"}
+    # 2. Local rule-based STAR transformation fallback
+    enhanced = ai_enhance_bullet(req.bullet_text, req.target_role or "Software Engineer")
+    return {"optimized_bullet": enhanced, "engine": "VFSTR Institutional STAR Engine"}
+
+@router.get("/hall-ticket/{student_id}/{application_id}")
+def get_hall_ticket(student_id: int, application_id: int, db: Session = Depends(get_db)):
+    profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Student not found")
+    app = db.query(Application).filter(Application.id == application_id, Application.student_id == student_id).first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Application record not found")
+    
+    if not ("shortlisted" in app.status.lower() or "confirmed" in app.status.lower()):
+        raise HTTPException(status_code=403, detail="Hall ticket is only issued for shortlisted / confirmed interviews.")
+
+    slot = app.interview_schedule
+    comp_name = app.job.company.name if app.job and app.job.company else "Recruiting Partner"
+    verification_hash = f"VFSTR-{profile.reg_no}-{app.id}-{slot.id if slot else '0'}-2026"
+    
+    return {
+        "institution": "Vignan's Foundation for Science, Technology and Research",
+        "document_title": "OFFICIAL PLACEMENT INTERVIEW HALL TICKET & ADMIT CARD",
+        "reg_no": profile.reg_no,
+        "student_name": profile.user.full_name,
+        "degree": profile.degree,
+        "branch": profile.branch,
+        "cgpa": profile.cgpa,
+        "company_name": comp_name,
+        "job_title": app.job.title if app.job else "Campus Recruit",
+        "ctc_lpa": app.job.ctc_lpa if app.job else 0.0,
+        "panel_name": slot.panel_name if slot else "Panel 1 - Technical Committee",
+        "block": slot.block_name if slot else "A-Block Placement Hub",
+        "chamber": slot.chamber_name if slot else "Interview Chamber 101",
+        "date": slot.slot_date if slot else "Scheduled Drive Day",
+        "time": slot.slot_time if slot else "10:00 AM - 10:45 AM",
+        "verification_hash": verification_hash,
+        "instructions": [
+            "Report to the assigned placement chamber 15 minutes prior to the scheduled slot.",
+            "Carry 2 hard copies of your ATS-verified resume and college ID card.",
+            "Dress in official campus formal attire.",
+            "Volunteers and Panel In-Charge will scan this QR verification hash upon entry."
+        ]
+    }
 
 @router.get("/roadmap/{student_id}/{job_id}")
 def get_student_roadmap(student_id: int, job_id: int, db: Session = Depends(get_db)):

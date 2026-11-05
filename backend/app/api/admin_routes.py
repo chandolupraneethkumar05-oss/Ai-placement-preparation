@@ -1,4 +1,7 @@
+import csv
+import io
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.models.all_models import StudentProfile, Company, JobPosting, Application, User
@@ -89,3 +92,41 @@ def export_nirf_summary(db: Session = Depends(get_db)):
         "highest_salary_lpa": 32.0,
         "naac_criterion_5_2_status": "Compliant"
     }
+
+@router.get("/export-placement-csv")
+def export_placement_csv(db: Session = Depends(get_db)):
+    """Exports full institutional placement records as a downloadable CSV for NAAC / NIRF accreditation."""
+    students = db.query(StudentProfile).all()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Reg No", "Student Name", "Email", "Degree", "Branch", 
+        "CGPA", "Placement Status", "Company Placed", "Package (LPA)", 
+        "ATS Score", "Total Applications"
+    ])
+    
+    for s in students:
+        placed_app = next((a for a in s.applications if "selected" in a.status.lower() or "confirmed" in a.status.lower()), None)
+        comp_name = placed_app.job.company.name if placed_app and placed_app.job and placed_app.job.company else "Not Yet Placed"
+        ctc = placed_app.job.ctc_lpa if placed_app and placed_app.job else 0.0
+        
+        writer.writerow([
+            s.reg_no,
+            s.user.full_name if s.user else "N/A",
+            s.user.email if s.user else "N/A",
+            s.degree,
+            s.branch,
+            s.cgpa,
+            s.placement_status,
+            comp_name,
+            ctc,
+            s.ats_score,
+            len(s.applications)
+        ])
+        
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=VFSTR_Institutional_Placement_Report_2026.csv"}
+    )

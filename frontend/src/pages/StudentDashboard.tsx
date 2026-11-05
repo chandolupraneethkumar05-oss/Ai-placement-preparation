@@ -12,6 +12,7 @@ import {
 import { RoadmapModal } from '../components/RoadmapModal';
 import { TargetRoleModal } from '../components/TargetRoleModal';
 import { MockInterviewModal } from '../components/MockInterviewModal';
+import { HallTicketModal } from '../components/HallTicketModal';
 import { TalentShineResumeBuilder } from '../components/TalentShineResumeBuilder';
 import { 
   Briefcase, 
@@ -87,6 +88,7 @@ export const StudentDashboard: React.FC<Props> = ({
   const [targetRoleModalOpen, setTargetRoleModalOpen] = useState(false);
   const [selectedRoadmap, setSelectedRoadmap] = useState<any>(null);
   const [mockModalCompany, setMockModalCompany] = useState<string | null>(null);
+  const [hallTicketAppId, setHallTicketAppId] = useState<number | null>(null);
 
   const profileId = session.profile_id || 1;
 
@@ -511,9 +513,15 @@ export const StudentDashboard: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* Launch Shortlisted Interview */}
+                {/* Launch Shortlisted Interview & Hall Ticket */}
                 {(app.status.includes('Shortlisted') || app.status.includes('Confirmed')) ? (
-                  <div className="flex justify-end pt-2">
+                  <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
+                    <button
+                      onClick={() => setHallTicketAppId(app.id)}
+                      className="bg-indigo-50 border border-indigo-300 hover:bg-indigo-100 text-indigo-900 font-bold text-xs px-4 py-2.5 rounded-xl shadow-sm flex items-center space-x-1.5 transition"
+                    >
+                      <span>🎫 View Hall Ticket & Pass</span>
+                    </button>
                     <button
                       onClick={() => setMockModalCompany(app.company)}
                       className="bg-gradient-to-r from-blue-700 to-indigo-600 hover:from-blue-800 hover:to-indigo-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-md flex items-center space-x-2 transition"
@@ -710,6 +718,15 @@ export const StudentDashboard: React.FC<Props> = ({
           shortlistedCompanies={shortlistedCompanies}
           initialCompany={mockModalCompany === 'LOCKED' ? null : mockModalCompany}
           onClose={() => setMockModalCompany(null)}
+        />
+      )}
+
+      {hallTicketAppId && (
+        <HallTicketModal
+          isOpen={Boolean(hallTicketAppId)}
+          studentId={profileId}
+          applicationId={hallTicketAppId}
+          onClose={() => setHallTicketAppId(null)}
         />
       )}
 
