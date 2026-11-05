@@ -61,16 +61,22 @@ class MockSubmissionRequest(BaseModel):
     student_answer: str
     api_key: Optional[str] = None
 
+def verify_student_ownership(student_profile: StudentProfile, auth_payload: Optional[dict]):
+    """Protects against Insecure Direct Object References (IDOR)."""
+    if auth_payload and auth_payload.get("role") == "student":
+        if str(student_profile.user_id) != str(auth_payload.get("sub")):
+            raise HTTPException(
+                status_code=403, 
+                detail="Security Violation: You are not authorized to view or mutate another student's profile or applications."
+            )
+
 @router.get("/profile/{student_id}")
 def get_student_profile(student_id: int, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student profile not found")
 
-    # Security Guardrail: Check authorization if token passed
-    if auth_payload and auth_payload.get("role") == "student":
-        if str(profile.user_id) != str(auth_payload.get("sub")):
-            raise HTTPException(status_code=403, detail="Security Violation: You are not authorized to view another student's profile.")
+    verify_student_ownership(profile, auth_payload)
 
     year_info = parse_vfstr_reg_no(profile.reg_no, profile.degree)
     
@@ -105,10 +111,11 @@ def get_student_profile(student_id: int, db: Session = Depends(get_db), auth_pay
     }
 
 @router.post("/upload-resume/{student_id}")
-async def upload_resume(student_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_resume(student_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), auth: dict = Depends(get_current_user_payload)):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
 
     contents = await file.read()
     if len(contents) > 5 * 1024 * 1024:
@@ -377,11 +384,12 @@ def get_jobs_for_student(student_id: int, db: Session = Depends(get_db)):
     return results
 
 @router.post("/apply/{student_id}/{job_id}")
-def apply_job(student_id: int, job_id: int, db: Session = Depends(get_db)):
+def apply_job(student_id: int, job_id: int, db: Session = Depends(get_db), auth: dict = Depends(get_current_user_payload)):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not profile or not job:
         raise HTTPException(status_code=404, detail="Student or Job not found")
+    verify_student_ownership(profile, auth)
 
     # STRICT GUARDRAIL: Skill gap roadmap requires an authentic uploaded or built resume
     if not profile.resume_text or len(profile.resume_text.strip()) < 30:
@@ -420,10 +428,11 @@ def apply_job(student_id: int, job_id: int, db: Session = Depends(get_db)):
     return {"message": "Application submitted", "status": "Applied"}
 
 @router.get("/applications/{student_id}")
-def get_student_applications(student_id: int, db: Session = Depends(get_db)):
+def get_student_applications(student_id: int, db: Session = Depends(get_db), auth: dict = Depends(get_current_user_payload)):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
 
     apps = db.query(Application).filter(Application.student_id == student_id).all()
     results = []

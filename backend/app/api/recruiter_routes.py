@@ -6,9 +6,19 @@ from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.models.all_models import RecruiterProfile, Company, JobPosting, Application, InterviewSchedule, Notification, StudentProfile
 from app.ai_engine.venue_manager import VFSTR_CAMPUS_VENUES, DEFAULT_TIME_SLOTS, check_slot_collision, suggest_available_slots
-from app.services.email_service import send_interview_pass_email
+from app.services.email_service import send_interview_pass_email, send_shortlist_email
+from app.core.security import get_current_user_payload
 
 router = APIRouter(prefix="/recruiter", tags=["Recruiter Portal"])
+
+def verify_recruiter_ownership(recruiter: RecruiterProfile, auth_payload: Optional[dict]):
+    """Prevents Recruiter IDOR vulnerabilities."""
+    if auth_payload and auth_payload.get("role") == "recruiter":
+        if str(recruiter.user_id) != str(auth_payload.get("sub")):
+            raise HTTPException(
+                status_code=403,
+                detail="Security Violation: You are not authorized to view or manage another corporate recruiter's drives or candidates."
+            )
 
 class PostJobRequest(BaseModel):
     title: str
@@ -32,10 +42,11 @@ class AllocateSlotRequest(BaseModel):
     panel_name: str = "Panel 1 (Technical & Coding)"
 
 @router.get("/dashboard/{recruiter_id}")
-def get_recruiter_dashboard(recruiter_id: int, db: Session = Depends(get_db)):
+def get_recruiter_dashboard(recruiter_id: int, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
     recruiter = db.query(RecruiterProfile).filter(RecruiterProfile.id == recruiter_id).first()
     if not recruiter:
         raise HTTPException(status_code=404, detail="Recruiter profile not found")
+    verify_recruiter_ownership(recruiter, auth_payload)
 
     company = recruiter.company
     jobs = recruiter.posted_jobs
@@ -56,10 +67,11 @@ def get_recruiter_dashboard(recruiter_id: int, db: Session = Depends(get_db)):
     }
 
 @router.get("/jobs/{recruiter_id}")
-def get_recruiter_jobs(recruiter_id: int, db: Session = Depends(get_db)):
+def get_recruiter_jobs(recruiter_id: int, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
     recruiter = db.query(RecruiterProfile).filter(RecruiterProfile.id == recruiter_id).first()
     if not recruiter:
         raise HTTPException(status_code=404, detail="Recruiter not found")
+    verify_recruiter_ownership(recruiter, auth_payload)
 
     results = []
     for j in recruiter.posted_jobs:
@@ -77,10 +89,11 @@ def get_recruiter_jobs(recruiter_id: int, db: Session = Depends(get_db)):
     return results
 
 @router.post("/jobs/{recruiter_id}")
-def post_job(recruiter_id: int, req: PostJobRequest, db: Session = Depends(get_db)):
+def post_job(recruiter_id: int, req: PostJobRequest, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
     recruiter = db.query(RecruiterProfile).filter(RecruiterProfile.id == recruiter_id).first()
     if not recruiter:
         raise HTTPException(status_code=404, detail="Recruiter not found")
+    verify_recruiter_ownership(recruiter, auth_payload)
 
     job = JobPosting(
         company_id=recruiter.company_id,
@@ -121,10 +134,15 @@ def post_job(recruiter_id: int, req: PostJobRequest, db: Session = Depends(get_d
     return {"message": "Campus Drive published successfully", "job_id": job.id, "students_notified": notified}
 
 @router.get("/applicants/{job_id}")
-def get_applicants(job_id: int, db: Session = Depends(get_db)):
+def get_applicants(job_id: int, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
     job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    if auth_payload and auth_payload.get("role") == "recruiter":
+        recruiter = db.query(RecruiterProfile).filter(RecruiterProfile.user_id == auth_payload.get("sub")).first()
+        if recruiter and job.company_id != recruiter.company_id:
+            raise HTTPException(status_code=403, detail="Security Violation: You cannot view applicants for another company's drive.")
 
     apps = db.query(Application).filter(Application.job_id == job_id).all()
     results = []
@@ -156,28 +174,50 @@ def get_applicants(job_id: int, db: Session = Depends(get_db)):
     return results
 
 @router.post("/shortlist/{application_id}")
-def shortlist_applicant(application_id: int, db: Session = Depends(get_db)):
+def shortlist_applicant(application_id: int, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
     app = db.query(Application).filter(Application.id == application_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
+
+    if auth_payload and auth_payload.get("role") == "recruiter":
+        recruiter = db.query(RecruiterProfile).filter(RecruiterProfile.user_id == auth_payload.get("sub")).first()
+        if recruiter and app.job and app.job.company_id != recruiter.company_id:
+            raise HTTPException(status_code=403, detail="Security Violation: You cannot shortlist applicants for another company's drive.")
 
     # Transitions to Shortlisted (Slot Pending)
     app.status = "Shortlisted (Slot Pending)"
     db.commit()
 
+    company_name = app.job.company.name if app.job and app.job.company else "Recruiting Employer"
+    job_title = app.job.title if app.job else "Campus Recruit"
+
+    # 1. In-App Notification
     notif = Notification(
         user_id=app.student.user_id,
-        title=f"🎉 Shortlisted for {app.job.title}!",
-        message=f"Congratulations! {app.job.company.name} shortlisted your application. Your panel slot will be allocated shortly."
+        title=f"🎉 Shortlisted for {job_title}!",
+        message=f"Congratulations! {company_name} shortlisted your application. Your panel slot will be allocated shortly."
     )
     db.add(notif)
     db.commit()
-    return {"message": "Candidate shortlisted (Slot Pending)", "status": app.status}
+
+    # 2. Email Dispatch: Send real notification to student's email
+    email_dispatch = send_shortlist_email(
+        student_email=app.student.user.email,
+        student_name=app.student.user.full_name,
+        company=company_name,
+        job_title=job_title
+    )
+
+    return {
+        "message": f"Candidate shortlisted! Notification email dispatched to {app.student.user.email}.",
+        "status": app.status,
+        "email_delivery": email_dispatch.get("status")
+    }
 
 @router.get("/suggest-venues")
-def suggest_venues(block: Optional[str] = "A Block", db: Session = Depends(get_db)):
+def suggest_venues(block: Optional[str] = "A Block", date: Optional[str] = None, db: Session = Depends(get_db)):
     all_slots = db.query(InterviewSchedule).all()
-    suggestions = suggest_available_slots(all_slots, block or "A Block")
+    suggestions = suggest_available_slots(all_slots, slot_date=date or "", block_preference=block or "A Block")
     return {
         "all_blocks": VFSTR_CAMPUS_VENUES,
         "time_slots": DEFAULT_TIME_SLOTS,
@@ -185,15 +225,27 @@ def suggest_venues(block: Optional[str] = "A Block", db: Session = Depends(get_d
     }
 
 @router.post("/allocate-slot")
-def allocate_slot(req: AllocateSlotRequest, db: Session = Depends(get_db)):
+def allocate_slot(req: AllocateSlotRequest, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
     """Human-in-the-Loop Smart Scheduling with Strict Collision Protection"""
     app = db.query(Application).filter(Application.id == req.application_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    # 1. Collision Detection against all existing schedules
+    if auth_payload and auth_payload.get("role") == "recruiter":
+        recruiter = db.query(RecruiterProfile).filter(RecruiterProfile.user_id == auth_payload.get("sub")).first()
+        if recruiter and app.job and app.job.company_id != recruiter.company_id:
+            raise HTTPException(status_code=403, detail="Security Violation: You cannot allocate interview chambers for another company's drive.")
+
+    # 1. Collision Detection against all existing schedules considering Date, Time, Venue, and Student
     all_schedules = db.query(InterviewSchedule).filter(InterviewSchedule.application_id != req.application_id).all()
-    col_check = check_slot_collision(all_schedules, req.block_name, req.chamber_name, req.slot_time, app.student_id)
+    col_check = check_slot_collision(
+        existing_schedules=all_schedules,
+        block=req.block_name,
+        chamber=req.chamber_name,
+        slot_date=req.slot_date,
+        slot_time=req.slot_time,
+        student_id=app.student_id
+    )
     
     if col_check["collision"]:
         raise HTTPException(status_code=409, detail=col_check["reason"])
@@ -242,7 +294,8 @@ def allocate_slot(req: AllocateSlotRequest, db: Session = Depends(get_db)):
         job_title=app.job.title,
         block=req.block_name,
         chamber=req.chamber_name,
-        slot_time=f"{req.slot_date} • {req.slot_time}"
+        slot_time=req.slot_time,
+        slot_date=req.slot_date
     )
 
     return {

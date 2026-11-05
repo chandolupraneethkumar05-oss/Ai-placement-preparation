@@ -324,3 +324,18 @@ export async function fetchNirfSummary() {
   });
   return res.json();
 }
+
+export async function fetchAdminCompanies() {
+  const res = await fetch(`${API_BASE}/admin/companies`, {
+    headers: getAuthHeaders()
+  });
+  return res.json();
+}
+
+export async function toggleCompanyVerification(companyId: number) {
+  const res = await fetch(`${API_BASE}/admin/verify-company/${companyId}`, {
+    method: "POST",
+    headers: getAuthHeaders()
+  });
+  return res.json();
+}

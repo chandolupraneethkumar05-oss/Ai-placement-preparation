@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { UserSession } from '../types';
-import { fetchAdminAnalytics, fetchNirfSummary, fetchAdminAllStudents, getPlacementCsvDownloadUrl } from '../api';
-import { Shield, FileDown, Award, Users, Search, Briefcase, Download, Table } from 'lucide-react';
+import { fetchAdminAnalytics, fetchNirfSummary, fetchAdminAllStudents, getPlacementCsvDownloadUrl, fetchAdminCompanies, toggleCompanyVerification } from '../api';
+import { Shield, FileDown, Award, Users, Search, Briefcase, Download, Table, Building2, CheckCircle2, XCircle } from 'lucide-react';
 
 interface Props {
   session: UserSession;
@@ -10,13 +10,27 @@ interface Props {
 export const AdminDashboard: React.FC<Props> = ({ session }) => {
   const [analytics, setAnalytics] = useState<any>(null);
   const [allStudents, setAllStudents] = useState<any[]>([]);
+  const [companies, setCompanies] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [nirfReport, setNirfReport] = useState<any>(null);
 
   useEffect(() => {
     fetchAdminAnalytics().then(setAnalytics).catch(console.error);
     fetchAdminAllStudents().then(setAllStudents).catch(console.error);
+    fetchAdminCompanies().then(setCompanies).catch(console.error);
   }, []);
+
+  const handleToggleVerification = async (companyId: number) => {
+    try {
+      await toggleCompanyVerification(companyId);
+      const updatedCompanies = await fetchAdminCompanies();
+      setCompanies(updatedCompanies);
+      const updatedAnalytics = await fetchAdminAnalytics();
+      setAnalytics(updatedAnalytics);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const handleExportNirf = async () => {
     const data = await fetchNirfSummary();
@@ -172,6 +186,55 @@ export const AdminDashboard: React.FC<Props> = ({ session }) => {
           </div>
         </div>
       )}
+
+      {/* Corporate Recruiting Partners Directory (Dean / HOD Verification Management) */}
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 pb-3 border-b border-slate-100">
+          <div>
+            <h3 className="text-base font-black text-slate-900 flex items-center space-x-2">
+              <Building2 className="text-purple-600" size={18} />
+              <span>Corporate Recruiting Partners & Verification ({analytics?.verified_companies || 0}/{analytics?.total_companies || companies.length} Verified)</span>
+            </h3>
+            <p className="text-xs text-slate-500">Live accreditation and partner screening management. Directly updates certified partner metrics.</p>
+          </div>
+          <span className="text-xs font-bold bg-purple-100 text-purple-800 px-3 py-1 rounded-full border border-purple-200">
+            {analytics?.verified_companies || 0} / {analytics?.total_companies || companies.length} Certified
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {companies.map((c: any) => (
+            <div key={c.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-col justify-between hover:border-purple-300 transition shadow-sm">
+              <div className="space-y-1">
+                <div className="flex justify-between items-start gap-1">
+                  <h4 className="font-extrabold text-sm text-slate-900">{c.name}</h4>
+                  {c.is_verified ? (
+                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                      <CheckCircle2 size={10} /> Certified
+                    </span>
+                  ) : (
+                    <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-200 flex items-center gap-1">
+                      <XCircle size={10} /> Pending
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-500 font-mono">{c.domain || c.website || 'Corporate Domain'}</div>
+                <div className="text-[11px] text-slate-600 pt-1">{c.jobs_count} Campus Drive(s) Posted</div>
+              </div>
+              <button
+                onClick={() => handleToggleVerification(c.id)}
+                className={`mt-3 w-full text-xs font-bold py-1.5 px-3 rounded-xl border transition ${
+                  c.is_verified
+                    ? 'bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-700 border-slate-200 hover:border-red-200'
+                    : 'bg-purple-600 hover:bg-purple-700 text-white border-purple-600 shadow-sm'
+                }`}
+              >
+                {c.is_verified ? 'Revoke Certification' : 'Verify Partner'}
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* All Students Performance Directory (Dean/HOD Privilege - Change #2) */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-4">

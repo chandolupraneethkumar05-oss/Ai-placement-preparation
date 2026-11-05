@@ -57,19 +57,25 @@ ACTION_VERBS = [
 
 def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
     """
-    Extracts text from PDF (via PyMuPDF) or DOCX (via python-docx).
-    Enforces strict guardrail against screenshots/images.
+    Extracts text from PDF (via PyMuPDF) or DOCX (via python-docx including tables).
+    Enforces strict guardrail against screenshots/images and validates file content signatures.
     """
+    if len(file_bytes) > 5 * 1024 * 1024:
+        raise ValueError("File size exceeds 5MB limit. Please upload a smaller document.")
+
     name_lower = filename.lower()
     
     # 1. Edge-case rejection for raw image files
     if name_lower.endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tiff')):
-        raise ValueError("Invalid file ingestion: Screenshots or image files are strictly rejected. Please upload a genuine text-based PDF or Word (.docx) document.")
+        raise ValueError("Screenshots or image files are strictly rejected. Please upload a selectable text-based PDF or Word (.docx) document.")
 
     text = ""
 
-    # 2. PDF Extraction via PyMuPDF
+    # 2. PDF Extraction via PyMuPDF with signature validation
     if name_lower.endswith('.pdf'):
+        if not file_bytes.startswith(b"%PDF-"):
+            raise ValueError("Corrupted or invalid PDF file header. Please ensure the document is a genuine PDF.")
+
         try:
             with fitz.open(stream=file_bytes, filetype="pdf") as doc:
                 for page in doc:
@@ -79,14 +85,23 @@ def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
 
         # Scanned screenshot embedded in PDF check
         if len(text.strip()) < 30:
-            raise ValueError("Invalid PDF ingestion: The document contains insufficient text layer (likely a screenshot or scanned image). Please upload an ATS-readable PDF with selectable text.")
+            raise ValueError("Invalid PDF ingestion: The document contains insufficient text layer (likely a scanned image). Please upload an ATS-readable PDF with selectable text.")
 
-    # 3. DOCX Extraction via python-docx
+    # 3. DOCX Extraction via python-docx (paragraphs and tables) with ZIP signature validation
     elif name_lower.endswith('.docx') or name_lower.endswith('.doc'):
+        if not file_bytes.startswith(b"PK\x03\x04") and not name_lower.endswith('.doc'):
+            raise ValueError("Corrupted or invalid DOCX archive. Please ensure the file is a valid Word document.")
+
         try:
             doc = docx.Document(io.BytesIO(file_bytes))
             for para in doc.paragraphs:
-                text += para.text + "\n"
+                if para.text.strip():
+                    text += para.text + "\n"
+            for table in doc.tables:
+                for row in table.rows:
+                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if cells:
+                        text += " | ".join(cells) + "\n"
         except Exception as e:
             raise ValueError(f"Error reading Word document: {str(e)}")
 
@@ -244,19 +259,20 @@ def calculate_ats_score(text: str, skills: list[str], target_role: str = "") -> 
 
     # 4. STAR Methodology & Quantifiable Metrics (Max 20 pts)
     metrics_score = 0
-    metrics_matches = re.findall(r'\b\d+(?:[\.,]\d+)?%|\b\d+\+\b|\b\d+x\b|\b\d+\s*(?:ms|users|requests|records|stars|clients|k|lpa)\b', text_lower)
-    has_metrics = len(metrics_matches) >= 2 or any(c.isdigit() for c in clean_text)
+    # Search for genuine quantifiable metrics (percentages, scale, time units, request volume)
+    metrics_matches = re.findall(r'\b\d+(?:[\.,]\d+)?%|\b\d+\+\b|\b\d+x\b|\b\d+\s*(?:ms|sec|seconds|users|requests|records|queries|stars|clients|k|m|lpa)\b', text_lower)
+    has_metrics = len(metrics_matches) >= 1
     
     action_verb_count = sum(1 for verb in ACTION_VERBS if re.search(r'\b' + verb + r'\b', text_lower))
 
-    if len(metrics_matches) >= 3:
+    if len(metrics_matches) >= 2:
         metrics_score += 10
-        strengths.append(f"Excellent quantifiable metrics and impact data ({len(metrics_matches)} detected).")
+        strengths.append(f"Contains quantifiable metrics and impact data ({len(metrics_matches)} detected).")
     elif has_metrics:
         metrics_score += 6
-        feedback.append("Include more quantifiable results (e.g., 'Reduced query latency by 35%', 'Served 1000+ active users').")
+        feedback.append("Consider quantifying additional achievements with verified results (e.g., benchmark numbers or user counts).")
     else:
-        feedback.append("Lacks quantifiable metrics. Quantify achievements with percentages, throughput, or scale.")
+        feedback.append("Lacks quantifiable metrics. Quantify achievements with genuine percentages, throughput, or scale achieved.")
 
     if action_verb_count >= 5:
         metrics_score += 10
@@ -423,41 +439,73 @@ def convert_builder_json_to_text(data: dict) -> str:
 
 def ai_enhance_bullet(bullet_text: str, target_role: str = "Software Engineer") -> dict:
     """
-    AI Bullet Point Enhancer using STAR framework:
-    Upgrades passive statements into high-impact metrics-oriented achievements.
+    Genuine STAR Bullet Enhancer:
+    Transforms weak or passive statements into professional, action-oriented bullet points
+    strictly without fabricating false metrics, percentages, or invented achievements.
+    Preserves candidate's authentic tools, responsibilities, and stated claims.
     """
     text = bullet_text.strip()
     if not text:
-        return {"original": "", "enhanced": "Architected and deployed scalable backend services reducing latency by 30%."}
+        return {
+            "original": "",
+            "enhanced": "Engineered robust software components utilizing industry best practices.",
+            "action_verb": "Engineered",
+            "framework": "STAR (Situation, Task, Action, Result)"
+        }
 
-    enhanced = text
-    lower = text.lower()
+    # Clean leading bullets, dashes, numbers
+    cleaned = re.sub(r'^[•\-\*\d\.\)\s]+', '', text).strip()
+    words = cleaned.split()
+    first_word = words[0] if words else "Developed"
     
-    if "api" in lower or "backend" in lower or "fastapi" in lower:
-        enhanced = f"Architected high-throughput RESTful endpoints using asynchronous microservices, improving throughput by 40% and cutting API response times to under 120ms."
-    elif "model" in lower or "ml" in lower or "data" in lower:
-        enhanced = f"Designed and fine-tuned machine learning predictive pipelines utilizing cross-validation, achieving 94.2% precision and reducing data processing latency by 25%."
-    elif "react" in lower or "frontend" in lower or "ui" in lower:
-        enhanced = f"Engineered responsive, accessible user interfaces following modern design standards, accelerating page load speeds by 35% across web and mobile viewports."
-    elif "database" in lower or "sql" in lower:
-        enhanced = f"Optimized relational database schemas with B-Tree composite indexing, accelerating query retrieval times by 45% under high concurrent load."
+    passive_map = {
+        "worked": "Engineered",
+        "working": "Engineering",
+        "responsible": "Spearheaded",
+        "helped": "Facilitated",
+        "made": "Architected",
+        "created": "Developed",
+        "built": "Constructed",
+        "did": "Executed",
+        "assisted": "Collaborated on",
+        "handled": "Administered",
+        "used": "Leveraged"
+    }
+
+    chosen_verb = None
+    for k, v in passive_map.items():
+        if k in first_word.lower():
+            chosen_verb = v
+            break
+
+    if chosen_verb:
+        rest = " ".join(words[1:]) if len(words) > 1 else ""
+        rest_cleaned = re.sub(r'^(on|with|for|in)\s+', '', rest, flags=re.IGNORECASE)
+        enhanced = f"{chosen_verb} {rest_cleaned}".strip()
+    elif first_word.capitalize() in ACTION_VERBS or first_word.endswith("ed"):
+        enhanced = f"{first_word.capitalize()} {' '.join(words[1:])}".strip()
     else:
-        enhanced = f"Spearheaded end-to-end development of {text.rstrip('.')}, collaborating cross-functionally to achieve 99.8% system reliability and deliver features 2 weeks ahead of schedule."
+        enhanced = f"Developed {cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned}".strip()
+
+    if not enhanced.endswith("."):
+        enhanced += "."
+
+    action_verb = enhanced.split()[0] if enhanced else "Developed"
 
     return {
         "original": bullet_text,
         "enhanced": enhanced,
-        "action_verb": enhanced.split()[0],
-        "framework": "STAR (Situation, Task, Action, Result)"
+        "action_verb": action_verb,
+        "framework": "STAR (Situation, Task, Action, Result) - Authentic Wording"
     }
 
 def ai_generate_summary(name: str, target_role: str, skills: list[str]) -> str:
-    """Generates an impactful, professional resume summary."""
-    top_skills = ", ".join(skills[:4]) if skills else "Data Structures, Python, Algorithms, and System Design"
-    role = target_role if target_role else "Software Development Engineer"
+    """Generates an impactful, non-fabricated professional resume summary from authentic candidate credentials."""
+    top_skills = ", ".join(skills[:5]) if skills else "Data Structures, Python, Algorithms, and System Architecture"
+    role = target_role if target_role else "Software Engineer"
     
     return (
-        f"Goal-oriented {role} candidate from VFSTR with strong foundational expertise in {top_skills}. "
-        f"Proven ability to architect scalable solutions, write clean maintainable code, and solve complex algorithmic problems. "
-        f"Eager to leverage modern engineering practices to drive measurable technical impact in enterprise environments."
+        f"Goal-oriented {role} candidate offering core competencies in {top_skills}. "
+        f"Demonstrated ability to write clean, maintainable code, analyze technical requirements, and develop scalable solutions. "
+        f"Committed to delivering reliable software outcomes and collaborating effectively across engineering teams."
     )

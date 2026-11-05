@@ -1,10 +1,12 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.models.all_models import User, StudentProfile, RecruiterProfile, Company
 from app.core.security import verify_password, get_password_hash, create_access_token
+from app.core.config import ADMIN_INVITATION_KEY, RECRUITER_INVITATION_CODE, ENABLE_DEMO_LOGIN, APP_ENV
 from app.ai_engine.year_calculator import parse_vfstr_reg_no
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Security"])
@@ -15,18 +17,17 @@ DISALLOWED_PERSONAL_DOMAINS = {
     "live.com", "icloud.com", "rediffmail.com", "zoho.com", "protonmail.com", 
     "mail.com", "gmx.com", "tempmail.com", "aol.com"
 }
-OFFICIAL_VFSTR_INVITATION_CODE = "VFSTR-RECRUIT-2026"
 
 class AuthRegisterRequest(BaseModel):
-    role: str # 'student', 'recruiter', 'admin'
-    full_name: str
-    password: str
+    role: str = Field(..., description="Role: 'student', 'recruiter', or 'admin'")
+    full_name: str = Field(..., min_length=2, max_length=120)
+    password: str = Field(..., min_length=6, max_length=128)
     # Student Fields
     reg_no: Optional[str] = None
     degree: Optional[str] = "B.Tech"
     branch: Optional[str] = "CSE"
     cgpa: Optional[float] = 7.5
-    # Recruiter Fields (Strict Corporate Guardrails)
+    # Recruiter Fields
     email: Optional[str] = None
     company_name: Optional[str] = None
     designation: Optional[str] = "HR Campus Lead"
@@ -40,55 +41,64 @@ class AuthLoginRequest(BaseModel):
 
 @router.post("/register")
 def register(req: AuthRegisterRequest, db: Session = Depends(get_db)):
-    role = req.role.lower()
+    role = req.role.lower().strip()
 
     if role == "student":
         if not req.reg_no:
             raise HTTPException(status_code=400, detail="Registration number is mandatory for student sign up")
         identifier = req.reg_no.strip().upper()
         
-        # STRICT GUARDRAIL: Exactly 10 characters for VFSTR Roll Number (e.g., 211FA05001)
+        # Guardrail: Exactly 10 characters for Student Roll Number (e.g. 211FA05001)
         if len(identifier) != 10:
             raise HTTPException(
                 status_code=400, 
-                detail="VFSTR Registration Number must be exactly 10 characters (e.g., 211FA05001, 241FA05999)."
+                detail="Student Registration Number must be exactly 10 characters (e.g., 211FA05001, 241FA05999)."
             )
 
         existing = db.query(User).filter(User.identifier == identifier).first()
         if existing:
             raise HTTPException(status_code=400, detail="Student with this registration number already registered")
 
-        # Autonomous year calculation
         year_info = parse_vfstr_reg_no(identifier, req.degree or "B.Tech")
-
         hashed_pw = get_password_hash(req.password)
         email = f"{identifier.lower()}@vignan.ac.in"
-        user = User(identifier=identifier, email=email, hashed_password=hashed_pw, role="student", full_name=req.full_name)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
 
-        # STRICT GUARDRAIL: Zero hardcoded skills, zero hardcoded ATS scores for new students!
-        profile = StudentProfile(
-            user_id=user.id,
-            reg_no=identifier,
-            degree=year_info["degree"],
-            duration_years=year_info["duration_years"],
-            start_year=year_info["start_year"],
-            end_year=year_info["end_year"],
-            branch=req.branch or "CSE",
-            cgpa=req.cgpa or 7.8,
-            skills_json='[]',
-            resume_text='',
-            ats_score=0,
-            ats_feedback_json='[]',
-            target_role='',
-            target_company='',
-            resume_builder_json='{}'
-        )
-        db.add(profile)
-        db.commit()
-        db.refresh(profile)
+        # Atomic transaction
+        try:
+            user = User(
+                identifier=identifier,
+                email=email,
+                hashed_password=hashed_pw,
+                role="student",
+                full_name=req.full_name
+            )
+            db.add(user)
+            db.flush()
+
+            profile = StudentProfile(
+                user_id=user.id,
+                reg_no=identifier,
+                degree=year_info["degree"],
+                duration_years=year_info["duration_years"],
+                start_year=year_info["start_year"],
+                end_year=year_info["end_year"],
+                branch=req.branch or "CSE",
+                cgpa=req.cgpa or 7.8,
+                skills_json='[]',
+                resume_text='',
+                ats_score=0,
+                ats_feedback_json='[]',
+                target_role='',
+                target_company='',
+                resume_builder_json='{}'
+            )
+            db.add(profile)
+            db.commit()
+            db.refresh(user)
+            db.refresh(profile)
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Registration failed during database write: {str(e)}")
 
         token = create_access_token({"sub": str(user.id), "role": "student", "identifier": identifier})
         return {
@@ -99,23 +109,24 @@ def register(req: AuthRegisterRequest, db: Session = Depends(get_db)):
             "profile_id": profile.id,
             "reg_no": identifier,
             "email": email,
-            "year_info": year_info
+            "degree": profile.degree,
+            "branch": profile.branch,
+            "year": year_info["year_label"],
+            "batch": year_info["batch"]
         }
 
     elif role == "recruiter":
         email = req.email.strip().lower() if req.email else None
-        if not email:
-            raise HTTPException(status_code=400, detail="Official corporate email is required for recruiter sign up")
+        if not email or "@" not in email:
+            raise HTTPException(status_code=400, detail="Valid corporate work email is mandatory for recruiters")
         
-        # GUARDRAIL 1: Disallow free/personal email domains
-        domain = email.split("@")[-1].lower() if "@" in email else ""
-        if domain in DISALLOWED_PERSONAL_DOMAINS or not domain:
+        domain = email.split("@")[-1].lower()
+        if domain in DISALLOWED_PERSONAL_DOMAINS:
             raise HTTPException(
                 status_code=400, 
-                detail="Personal email providers (@gmail, @yahoo, @outlook, etc.) are strictly prohibited. Recruiters must use an official corporate enterprise email domain."
+                detail=f"Registration rejected: Personal email providers (@{domain}) are strictly prohibited for corporate recruiters. Please use official company email."
             )
 
-        # GUARDRAIL 2: Verified Corporate Employee ID (minimum 4 alphanumeric characters)
         emp_id = (req.employee_id or "").strip()
         if len(emp_id) < 4:
             raise HTTPException(
@@ -123,12 +134,11 @@ def register(req: AuthRegisterRequest, db: Session = Depends(get_db)):
                 detail="Official Corporate Employee ID / Staff ID is mandatory (minimum 4 characters, e.g. AMZ-HR-7891)."
             )
 
-        # GUARDRAIL 3: Official VFSTR Placement Drive Invitation Code
         inv_code = (req.invitation_code or "").strip().upper()
-        if inv_code != OFFICIAL_VFSTR_INVITATION_CODE:
+        if inv_code != RECRUITER_INVITATION_CODE:
             raise HTTPException(
                 status_code=403,
-                detail="Invalid VFSTR Placement Invitation Code. Only corporate recruiters invited and pre-approved by VFSTR Training & Placement Cell can register."
+                detail="Invalid VFSTR Placement Invitation Code. Only corporate recruiters invited and pre-approved by the Training & Placement Cell can register."
             )
 
         existing = db.query(User).filter(User.identifier == email).first()
@@ -136,31 +146,42 @@ def register(req: AuthRegisterRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="Recruiter with this corporate email already registered")
 
         comp_name = req.company_name or "Tech Recruit Partner"
-        company = db.query(Company).filter(Company.name == comp_name).first()
-        if not company:
-            company = Company(name=comp_name, domain=domain, is_verified=True)
-            db.add(company)
+        
+        # Atomic transaction
+        try:
+            company = db.query(Company).filter(Company.name == comp_name).first()
+            if not company:
+                company = Company(name=comp_name, domain=domain, is_verified=False)
+                db.add(company)
+                db.flush()
+
+            hashed_pw = get_password_hash(req.password)
+            user = User(
+                identifier=email,
+                email=email,
+                hashed_password=hashed_pw,
+                role="recruiter",
+                full_name=req.full_name
+            )
+            db.add(user)
+            db.flush()
+
+            recruiter_profile = RecruiterProfile(
+                user_id=user.id,
+                company_id=company.id,
+                designation=req.designation or "HR Campus Lead",
+                official_email=email,
+                employee_id=emp_id,
+                invitation_code=inv_code,
+                is_verified=company.is_verified
+            )
+            db.add(recruiter_profile)
             db.commit()
-            db.refresh(company)
-
-        hashed_pw = get_password_hash(req.password)
-        user = User(identifier=email, email=email, hashed_password=hashed_pw, role="recruiter", full_name=req.full_name)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        recruiter_profile = RecruiterProfile(
-            user_id=user.id,
-            company_id=company.id,
-            designation=req.designation or "HR Campus Lead",
-            official_email=email,
-            employee_id=emp_id,
-            invitation_code=inv_code,
-            is_verified=True
-        )
-        db.add(recruiter_profile)
-        db.commit()
-        db.refresh(recruiter_profile)
+            db.refresh(user)
+            db.refresh(recruiter_profile)
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Recruiter registration failed: {str(e)}")
 
         token = create_access_token({"sub": str(user.id), "role": "recruiter", "identifier": email})
         return {
@@ -171,23 +192,42 @@ def register(req: AuthRegisterRequest, db: Session = Depends(get_db)):
             "profile_id": recruiter_profile.id,
             "company_name": company.name,
             "employee_id": emp_id,
-            "is_verified": True,
+            "is_verified": recruiter_profile.is_verified,
             "email": email
         }
 
     elif role == "admin":
         email = req.email.strip().lower() if req.email else None
-        if not email:
+        if not email or "@" not in email:
             raise HTTPException(status_code=400, detail="Institutional email is required for Administrator sign up")
+        
+        # SECURE ADMIN GUARDRAIL: Master Admin Invitation Key required
+        admin_key = (req.invitation_code or "").strip()
+        if not ADMIN_INVITATION_KEY or admin_key != ADMIN_INVITATION_KEY:
+            raise HTTPException(
+                status_code=403,
+                detail="Security Violation: Public administrator registration is restricted. A valid institutional Master Admin Key is required."
+            )
+
         existing = db.query(User).filter(User.identifier == email).first()
         if existing:
             raise HTTPException(status_code=400, detail="Administrator with this email already registered")
 
         hashed_pw = get_password_hash(req.password)
-        user = User(identifier=email, email=email, hashed_password=hashed_pw, role="admin", full_name=req.full_name)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        try:
+            user = User(
+                identifier=email,
+                email=email,
+                hashed_password=hashed_pw,
+                role="admin",
+                full_name=req.full_name
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Administrator creation failed: {str(e)}")
 
         token = create_access_token({"sub": str(user.id), "role": "admin", "identifier": email})
         return {
@@ -204,77 +244,116 @@ def register(req: AuthRegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login")
 def login(req: AuthLoginRequest, db: Session = Depends(get_db)):
-    role = req.role.lower()
+    role = req.role.lower().strip()
     identifier = req.identifier.strip()
     
     if role == "student":
-        identifier = identifier.upper() # Roll number normalized
-        # STRICT GUARDRAIL: Exactly 10 characters for student roll number
+        identifier = identifier.upper()
         if len(identifier) != 10:
             raise HTTPException(
                 status_code=400,
-                detail="VFSTR Registration Number must be exactly 10 characters (e.g., 211FA05001)."
+                detail="VFSTR Student Registration Number must be exactly 10 characters (e.g., 231FA05001)"
             )
-    elif role == "recruiter":
-        email_clean = identifier.lower()
-        domain = email_clean.split("@")[-1] if "@" in email_clean else ""
-        if domain in DISALLOWED_PERSONAL_DOMAINS:
+    else:
+        identifier = identifier.lower()
+
+    user = db.query(User).filter(User.identifier == identifier).first()
+    
+    if not user:
+        if role == "student":
             raise HTTPException(
-                status_code=400,
-                detail="Personal email providers (@gmail, @yahoo, @outlook, etc.) are strictly prohibited. Recruiters must use their official corporate work email."
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Registration Number '{identifier}' is not registered. Please create a student account."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Account '{identifier}' is not registered. Please sign up or contact T&P administration."
             )
 
-    user = db.query(User).filter(User.identifier == identifier, User.role == role).first()
-    if not user:
+    if user.role != role:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"No active account found for {role.capitalize()} with identifier '{identifier}'"
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access Denied: Account '{identifier}' is registered as '{user.role.upper()}', not '{role.upper()}'."
         )
 
     if not verify_password(req.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials provided. Please check your password."
+            detail="Invalid password. Please check your credentials and try again."
         )
 
     token = create_access_token({"sub": str(user.id), "role": user.role, "identifier": user.identifier})
 
-    profile_id = None
-    year_info = None
-    reg_no = None
-    company_name = None
-    employee_id = None
+    # Student metadata
+    if user.role == "student" and user.student_profile:
+        sp = user.student_profile
+        year_info = parse_vfstr_reg_no(sp.reg_no, sp.degree)
+        return {
+            "access_token": token,
+            "role": "student",
+            "full_name": user.full_name,
+            "user_id": user.id,
+            "profile_id": sp.id,
+            "reg_no": sp.reg_no,
+            "email": user.email,
+            "degree": sp.degree,
+            "branch": sp.branch,
+            "year": year_info["year_label"],
+            "batch": year_info["batch"]
+        }
 
-    if role == "student" and user.student_profile:
-        profile_id = user.student_profile.id
-        reg_no = user.student_profile.reg_no
-        year_info = parse_vfstr_reg_no(user.student_profile.reg_no, user.student_profile.degree)
-    elif role == "recruiter" and user.recruiter_profile:
-        profile_id = user.recruiter_profile.id
-        company_name = user.recruiter_profile.company.name if user.recruiter_profile.company else None
-        employee_id = user.recruiter_profile.employee_id
+    # Recruiter metadata
+    elif user.role == "recruiter" and user.recruiter_profile:
+        rp = user.recruiter_profile
+        return {
+            "access_token": token,
+            "role": "recruiter",
+            "full_name": user.full_name,
+            "user_id": user.id,
+            "profile_id": rp.id,
+            "company_name": rp.company.name if rp.company else "Tech Company",
+            "employee_id": rp.employee_id,
+            "is_verified": rp.is_verified,
+            "email": user.email
+        }
+
+    # Admin metadata
+    elif user.role == "admin":
+        return {
+            "access_token": token,
+            "role": "admin",
+            "full_name": user.full_name,
+            "user_id": user.id,
+            "profile_id": None,
+            "email": user.email
+        }
 
     return {
         "access_token": token,
-        "token_type": "bearer",
         "role": user.role,
         "full_name": user.full_name,
         "user_id": user.id,
-        "profile_id": profile_id,
-        "reg_no": reg_no,
-        "company_name": company_name,
-        "employee_id": employee_id,
-        "is_verified": True if role == "recruiter" else False,
-        "email": user.email,
-        "year_info": year_info
+        "profile_id": None,
+        "email": user.email
     }
 
 @router.get("/demo-personas")
 def get_demo_personas(db: Session = Depends(get_db)):
-    """Provides instant 1-click test personas for the hackathon evaluator."""
+    """
+    Returns sandboxed preview personas for evaluation.
+    In production environments or when ENABLE_DEMO_LOGIN=False, public demo tokens are disabled.
+    Administrator persona tokens are strictly excluded from public demo endpoints.
+    """
+    if not ENABLE_DEMO_LOGIN or APP_ENV == "production":
+        raise HTTPException(
+            status_code=403,
+            detail="Public demo login is disabled in this environment for security. Please sign in with registered credentials."
+        )
+
     personas = []
-    
-    # Student 1: Rahul Sharma (With resume)
+
+    # Student 1: With Resume
     s1 = db.query(User).filter(User.identifier == "211FA05001").first()
     if s1 and s1.student_profile:
         t1 = create_access_token({"sub": str(s1.id), "role": "student", "identifier": s1.identifier})
@@ -290,7 +369,7 @@ def get_demo_personas(db: Session = Depends(get_db)):
             "email": s1.email
         })
 
-    # Student 2: New Student (Zero resume, Real 0 ATS Score test)
+    # Student 2: Fresh User
     s_new = db.query(User).filter(User.identifier == "241FA05999").first()
     if s_new and s_new.student_profile:
         t_new = create_access_token({"sub": str(s_new.id), "role": "student", "identifier": s_new.identifier})
@@ -322,20 +401,5 @@ def get_demo_personas(db: Session = Depends(get_db)):
             "email": r1.email
         })
 
-    # Admin: Dean Placements
-    a1 = db.query(User).filter(User.role == "admin").first()
-    if a1:
-        ta1 = create_access_token({"sub": str(a1.id), "role": "admin", "identifier": a1.identifier})
-        personas.append({
-            "label": "Dr. K. V. Rao (Dean Training & Placements | VFSTR)",
-            "role": "admin",
-            "identifier": a1.identifier,
-            "token": ta1,
-            "full_name": a1.full_name,
-            "user_id": a1.id,
-            "profile_id": None,
-            "reg_no": None,
-            "email": a1.email
-        })
-
+    # Note: Admin persona is deliberately NOT issued via public demo token to prevent unauthorized institutional takeover.
     return personas

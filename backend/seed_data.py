@@ -13,6 +13,10 @@ def seed_database(force_recreate: bool = False):
     existing_users_count = db.query(User).count()
     if existing_users_count > 0 and not force_recreate:
         print(f"VFSTR Placement Database already initialized with {existing_users_count} users. Preserving registered accounts.")
+        cognizant = db.query(Company).filter(Company.name == "Cognizant").first()
+        if cognizant and cognizant.is_verified:
+            cognizant.is_verified = False
+            db.commit()
         db.close()
         return
 
@@ -34,18 +38,18 @@ def seed_database(force_recreate: bool = False):
     db.add(admin)
     db.commit()
 
-    # 2. Companies & Recruiters
+    # 2. Companies & Recruiters (3 Verified Industry Partners, 1 Pending Accreditation Review)
     companies_data = [
-        {"name": "Amazon", "domain": "amazon.com", "website": "https://amazon.jobs", "recruiter_name": "Vikram Seth", "email": "recruiter@amazon.com", "designation": "Campus Lead", "employee_id": "AMZ-HR-7891"},
-        {"name": "TCS", "domain": "tcs.com", "website": "https://tcs.com/careers", "recruiter_name": "Ananya Roy", "email": "careers@tcs.com", "designation": "Talent Partner", "employee_id": "TCS-TA-4021"},
-        {"name": "Infosys", "domain": "infosys.com", "website": "https://infosys.com", "recruiter_name": "Deepak Verma", "email": "campus@infosys.com", "designation": "HR Specialist", "employee_id": "INF-HR-9012"},
-        {"name": "Cognizant", "domain": "cognizant.com", "website": "https://cognizant.com", "recruiter_name": "Rohan Mehra", "email": "campus@cognizant.com", "designation": "University Lead", "employee_id": "CTS-UR-3108"}
+        {"name": "Amazon", "domain": "amazon.com", "website": "https://amazon.jobs", "recruiter_name": "Vikram Seth", "email": "recruiter@amazon.com", "designation": "Campus Lead", "employee_id": "AMZ-HR-7891", "is_verified": True},
+        {"name": "TCS", "domain": "tcs.com", "website": "https://tcs.com/careers", "recruiter_name": "Ananya Roy", "email": "careers@tcs.com", "designation": "Talent Partner", "employee_id": "TCS-TA-4021", "is_verified": True},
+        {"name": "Infosys", "domain": "infosys.com", "website": "https://infosys.com", "recruiter_name": "Deepak Verma", "email": "campus@infosys.com", "designation": "HR Specialist", "employee_id": "INF-HR-9012", "is_verified": True},
+        {"name": "Cognizant", "domain": "cognizant.com", "website": "https://cognizant.com", "recruiter_name": "Rohan Mehra", "email": "campus@cognizant.com", "designation": "University Lead", "employee_id": "CTS-UR-3108", "is_verified": False}
     ]
 
     company_objs = {}
     recruiter_objs = {}
     for c in companies_data:
-        comp = Company(name=c["name"], domain=c["domain"], website=c["website"], is_verified=True)
+        comp = Company(name=c["name"], domain=c["domain"], website=c["website"], is_verified=c.get("is_verified", False))
         db.add(comp)
         db.commit()
         db.refresh(comp)

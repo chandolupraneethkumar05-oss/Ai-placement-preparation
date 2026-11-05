@@ -1,63 +1,151 @@
 import os
 import json
+import html
 import urllib.request
+import urllib.error
+from app.core.config import RESEND_API_KEY, EMAIL_FROM_ADDRESS
 
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+def send_shortlist_email(
+    student_email: str,
+    student_name: str,
+    company: str,
+    job_title: str
+) -> dict:
+    """
+    Dispatches verified HTML email notification to student when their application is Shortlisted.
+    HTML-escapes all parameters to prevent HTML injection attacks.
+    """
+    safe_name = html.escape(student_name or "Candidate")
+    safe_company = html.escape(company or "Corporate Partner")
+    safe_title = html.escape(job_title or "Campus Recruitment")
 
-def send_interview_pass_email(student_email: str, student_name: str, company: str, job_title: str, block: str, chamber: str, slot_time: str):
-    """
-    Dispatches verified HTML interview pass to student registered email using Resend API.
-    Gracefully logs if API key is not yet provided.
-    """
-    subject = f"🎯 Interview Confirmed: {company} - {job_title} at {block}"
+    subject = f"🎉 Shortlisted for {company} - {job_title} | VFSTR Placements"
     html_body = f"""
     <html>
-      <body style="font-family: Arial, sans-serif; padding: 20px; color: #0f172a; background-color: #f8fafc;">
-        <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden;">
-          <div style="background-color: #1e3a8a; color: white; padding: 20px;">
-            <h2 style="margin: 0;">VFSTR Training & Placement Cell</h2>
-            <p style="margin: 5px 0 0 0; font-size: 13px; opacity: 0.9;">Official Campus Recruitment Pass</p>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 24px; color: #0f172a; background-color: #f8fafc; line-height: 1.5;">
+        <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+          <div style="background: linear-gradient(135deg, #1e3a8a, #312e81); color: white; padding: 24px;">
+            <div style="font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; color: #93c5fd;">Training & Placement Cell</div>
+            <h2 style="margin: 8px 0 0 0; font-size: 20px; font-weight: 800;">Application Shortlisted!</h2>
           </div>
-          <div style="padding: 24px;">
-            <p>Dear <b>{student_name}</b>,</p>
-            <p>Your interview panel and physical venue for <b>{company}</b> ({job_title}) have been officially confirmed.</p>
+          <div style="padding: 28px;">
+            <p style="font-size: 15px; margin-top: 0;">Dear <b>{safe_name}</b>,</p>
+            <p style="font-size: 14px; color: #334155;">
+              Congratulations! Your resume and profile have been officially reviewed and <b>Shortlisted</b> by <b>{safe_company}</b> for the position of <b>{safe_title}</b>.
+            </p>
             
-            <div style="background: #f1f5f9; padding: 16px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2563eb;">
-              <p style="margin: 4px 0;"><b>🏢 Campus Venue:</b> {block} - {chamber}</p>
-              <p style="margin: 4px 0;"><b>⏰ Allocated Slot:</b> {slot_time}</p>
-              <p style="margin: 4px 0;"><b>💼 Company:</b> {company}</p>
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #16a34a; padding: 18px; border-radius: 10px; margin: 24px 0;">
+              <div style="font-size: 13px; font-weight: bold; color: #166534; margin-bottom: 6px;">🎯 Next Steps:</div>
+              <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #14532d;">
+                <li>Your company-specific <b>Interview Assessment Simulator</b> is now unlocked on your student portal.</li>
+                <li>Your assigned interview panel, date, and venue chamber will be confirmed shortly.</li>
+                <li>Check your Placement Dashboard to generate your official <b>Digital Hall Ticket & QR Pass</b>.</li>
+              </ul>
             </div>
 
-            <p style="font-size: 13px; color: #475569;">Please report to the allocated venue 10 minutes prior to your slot with 2 hard copies of your ATS resume and VFSTR student ID card.</p>
-            <p style="font-size: 12px; color: #64748b; margin-top: 24px;">Vignan's Foundation for Science, Technology and Research (VFSTR)</p>
+            <p style="font-size: 13px; color: #64748b; margin-top: 24px;">
+              Best regards,<br>
+              <b>Central Training & Placement Cell</b><br>
+              Vignan's Foundation for Science, Technology and Research (VFSTR)
+            </p>
           </div>
         </div>
       </body>
     </html>
     """
 
+    return _dispatch_email(student_email, subject, html_body)
+
+def send_interview_pass_email(
+    student_email: str,
+    student_name: str,
+    company: str,
+    job_title: str,
+    block: str,
+    chamber: str,
+    slot_time: str,
+    slot_date: str = ""
+) -> dict:
+    """
+    Dispatches verified HTML interview pass to student registered email using Resend API.
+    HTML-escapes all parameters to prevent HTML injection attacks.
+    """
+    safe_name = html.escape(student_name or "Candidate")
+    safe_company = html.escape(company or "Corporate Partner")
+    safe_title = html.escape(job_title or "Campus Recruitment")
+    safe_block = html.escape(block or "A Block")
+    safe_chamber = html.escape(chamber or "Panel Chamber")
+    safe_time = html.escape(slot_time or "Scheduled Slot")
+    safe_date = html.escape(slot_date or "Scheduled Date")
+
+    subject = f"🎯 Interview Pass Confirmed: {company} - {job_title} at {block}"
+    html_body = f"""
+    <html>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 24px; color: #0f172a; background-color: #f8fafc; line-height: 1.5;">
+        <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+          <div style="background: linear-gradient(135deg, #1e3a8a, #1e1b4b); color: white; padding: 24px;">
+            <div style="font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; color: #93c5fd;">Official Admit Card</div>
+            <h2 style="margin: 8px 0 0 0; font-size: 20px; font-weight: 800;">Interview Pass Confirmed</h2>
+          </div>
+          <div style="padding: 28px;">
+            <p style="font-size: 15px; margin-top: 0;">Dear <b>{safe_name}</b>,</p>
+            <p style="font-size: 14px; color: #334155;">
+              Your interview panel and physical campus venue for <b>{safe_company}</b> ({safe_title}) have been officially scheduled.
+            </p>
+            
+            <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-left: 4px solid #2563eb; padding: 18px; border-radius: 10px; margin: 20px 0;">
+              <p style="margin: 4px 0; font-size: 13px;"><b>🏢 Campus Venue:</b> {safe_block} - {safe_chamber}</p>
+              <p style="margin: 4px 0; font-size: 13px;"><b>📅 Date:</b> {safe_date}</p>
+              <p style="margin: 4px 0; font-size: 13px;"><b>⏰ Allocated Slot:</b> {safe_time}</p>
+              <p style="margin: 4px 0; font-size: 13px;"><b>💼 Employer:</b> {safe_company}</p>
+            </div>
+
+            <p style="font-size: 13px; color: #475569;">
+              Please report to the assigned chamber 15 minutes prior with 2 hard copies of your ATS resume and VFSTR student ID card.
+            </p>
+            <p style="font-size: 12px; color: #64748b; margin-top: 24px;">
+              Central Training & Placement Cell<br>
+              Vignan's Foundation for Science, Technology and Research (VFSTR)
+            </p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    return _dispatch_email(student_email, subject, html_body)
+
+def _dispatch_email(recipient_email: str, subject: str, html_content: str) -> dict:
+    if not recipient_email or "@" not in recipient_email:
+        return {"status": "failed", "error": "Invalid recipient email address"}
+
     if not RESEND_API_KEY or RESEND_API_KEY.startswith("your_"):
-        print(f"[EMAIL SIMULATION] Sent to {student_email}: {subject} | Venue: {block} - {chamber} at {slot_time}")
-        return {"status": "simulated", "recipient": student_email}
+        print(f"[EMAIL SIMULATION] To: {recipient_email} | Subject: {subject}")
+        return {"status": "simulated", "recipient": recipient_email, "subject": subject}
 
     try:
         req = urllib.request.Request(
             "https://api.resend.com/emails",
             data=json.dumps({
-                "from": "VFSTR Placements <onboarding@resend.dev>",
-                "to": [student_email],
+                "from": EMAIL_FROM_ADDRESS,
+                "to": [recipient_email],
                 "subject": subject,
-                "html": html_body
+                "html": html_content
             }).encode('utf-8'),
             headers={
                 "Authorization": f"Bearer {RESEND_API_KEY}",
                 "Content-Type": "application/json"
-            }
+            },
+            method="POST"
         )
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-            print(f"[RESEND EMAIL DELIVERED] ID: {data.get('id')} to {student_email}")
-            return {"status": "delivered", "id": data.get("id")}
+            print(f"[RESEND EMAIL DELIVERED] ID: {data.get('id')} to {recipient_email}")
+            return {"status": "delivered", "id": data.get("id"), "recipient": recipient_email}
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode('utf-8') if e.fp else str(e)
+        print(f"[RESEND EMAIL ERROR {e.code}] {err_msg}")
+        return {"status": "failed", "error": f"HTTP {e.code}: {err_msg}"}
     except Exception as e:
-        print(f"[RESEND EMAIL NOTICE] Could not dispatch email: {e}")
+        print(f"[EMAIL DISPATCH EXCEPTION] {e}")
         return {"status": "failed", "error": str(e)}
