@@ -1,7 +1,10 @@
 import io
 import re
-import fitz # PyMuPDF
-import docx # python-docx
+try:
+    import pymupdf as fitz  # PyMuPDF modern import
+except ImportError:
+    import fitz
+import docx  # python-docx
 
 SKILL_TAXONOMY = {
     "Languages": ["Python", "Java", "C++", "C", "JavaScript", "TypeScript", "Go", "Rust", "SQL", "HTML", "CSS", "Kotlin", "Swift", "R", "PHP"],
@@ -68,9 +71,9 @@ def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
     # 2. PDF Extraction via PyMuPDF
     if name_lower.endswith('.pdf'):
         try:
-            doc = fitz.open(stream=file_bytes, filetype="pdf")
-            for page in doc:
-                text += page.get_text() + "\n"
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                for page in doc:
+                    text += page.get_text() + "\n"
         except Exception as e:
             raise ValueError(f"Error reading PDF file: {str(e)}")
 

@@ -109,6 +109,8 @@ async def upload_resume(student_id: int, file: UploadFile = File(...), db: Sessi
         raise HTTPException(status_code=404, detail="Student not found")
 
     contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File size exceeds 5MB limit. Please upload a smaller document.")
     try:
         extracted_text = extract_text_from_file(contents, file.filename)
     except ValueError as ve:

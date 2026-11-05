@@ -1,4 +1,9 @@
-const API_BASE = import.meta.env.VITE_API_BASE || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? "http://127.0.0.1:8000" : "");
+let rawBase = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || "").trim();
+if (rawBase && !rawBase.startsWith("http://") && !rawBase.startsWith("https://")) {
+  rawBase = `https://${rawBase}`;
+}
+rawBase = rawBase.replace(/\/+$/, "");
+const API_BASE = rawBase || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? "http://127.0.0.1:8000" : "");
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("autoplace_token");
