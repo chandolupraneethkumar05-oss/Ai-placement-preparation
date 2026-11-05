@@ -3,7 +3,10 @@ if (rawBase && !rawBase.startsWith("http://") && !rawBase.startsWith("https://")
   rawBase = `https://${rawBase}`;
 }
 rawBase = rawBase.replace(/\/+$/, "");
-const API_BASE = rawBase || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? "http://127.0.0.1:8000" : "");
+
+// In unified full-stack mode, frontend is served directly by backend -> use relative "" (same domain, no CORS, no failed to fetch)
+// In local dev mode with Vite server on port 5173 / 3000, fallback to local backend on port 8000
+const API_BASE = rawBase || (typeof window !== "undefined" && (window.location.port === "5173" || window.location.port === "3000") ? "http://127.0.0.1:8000" : "");
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("autoplace_token");

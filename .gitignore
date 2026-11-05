@@ -12,8 +12,7 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Production Build Artifacts
-dist/
+# Production Build Artifacts (frontend/dist is tracked for unified single-URL deployment)
 build/
 
 # Local Environment & Secrets

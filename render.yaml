@@ -1,14 +1,15 @@
 services:
-  # ==========================================
-  # 1. FastAPI Backend (Web Service)
-  # ==========================================
+  # =========================================================================
+  # Unified Full-Stack Service: React Frontend + FastAPI Backend
+  # Serves the complete application on a SINGLE URL and SINGLE service!
+  # Zero CORS, Zero cross-origin "Failed to fetch", 100% Free Plan ($0/month).
+  # =========================================================================
   - type: web
-    name: autoplace-ai-backend
+    name: ai-placement-preparation
     runtime: python
     plan: free
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --app-dir backend
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -16,23 +17,3 @@ services:
         value: sqlite:///./placement.db
       - key: SECRET_KEY
         generateValue: true
-
-  # ==========================================
-  # 2. React + Vite Frontend (Static Site)
-  # ==========================================
-  - type: web
-    name: autoplace-ai-frontend
-    runtime: static
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
-    envVars:
-      - key: VITE_API_BASE
-        fromService:
-          type: web
-          name: autoplace-ai-backend
-          property: host
