@@ -1,3 +1,13 @@
+databases:
+  # =========================================================================
+  # Permanent PostgreSQL Database (Managed by Render)
+  # Persistent storage: all accounts, resumes, tests remain permanently!
+  # =========================================================================
+  - name: autoplace-db
+    databaseName: autoplace_db
+    user: autoplace_user
+    plan: free
+
 services:
   # =========================================================================
   # Unified Full-Stack Service: React Frontend + FastAPI Backend
@@ -14,6 +24,8 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: DATABASE_URL
-        value: sqlite:///./placement.db
+        fromDatabase:
+          name: autoplace-db
+          property: connectionString
       - key: SECRET_KEY
         generateValue: true
