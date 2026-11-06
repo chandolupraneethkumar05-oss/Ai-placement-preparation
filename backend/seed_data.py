@@ -159,12 +159,121 @@ def seed_database(force_recreate: bool = False):
         db.refresh(job)
         job_objs.append(job)
 
-    # 4. Clean Fresh Slate: No mock students or mock applications.
-    # Students register themselves fresh with genuine credentials, roll numbers, and resumes.
-    print("Database initialized fresh with clean institutional master tables (Zero mock students, Zero hardcoded scores).")
+    # 4. Standard Pre-Configured Sample Students (for instant login & evaluation)
+    sample_students = [
+        {
+            "reg_no": "231FA05001",
+            "full_name": "Rahul Sharma",
+            "email": "231fa05001@vignan.ac.in",
+            "degree": "B.Tech",
+            "branch": "CSE",
+            "cgpa": 8.85,
+            "target_role": "Software Development Engineer (SDE)",
+            "target_company": "Amazon",
+            "skills": ["Python", "Java", "Data Structures", "Algorithms", "SQL", "System Design", "FastAPI", "React", "Git"],
+            "resume_text": """Rahul Sharma
+231fa05001@vignan.ac.in | +91 9876543210 | Guntur, AP | linkedin.com/in/rahulsharma | github.com/rahulsharma
+
+PROFESSIONAL SUMMARY
+Proactive Computer Science undergraduate with strong foundation in distributed systems, full-stack development, and algorithmic problem solving. Experienced in building scalable APIs and cloud-ready web applications.
+
+EDUCATION
+Vignan's Foundation for Science, Technology and Research (VFSTR)
+Bachelor of Technology in Computer Science and Engineering
+CGPA: 8.85 / 10.0 | Expected Graduation: May 2027
+
+TECHNICAL SKILLS
+- Programming Languages: Python, Java, C++, SQL, JavaScript
+- Frameworks & Libraries: FastAPI, React, Spring Boot, Node.js
+- Core Concepts: Data Structures, Algorithms, Object-Oriented Design, System Design, Database Management Systems
+- Developer Tools: Git, GitHub, Docker, Postman, Linux
+
+PROJECTS
+High-Throughput Microservice Platform | Python, FastAPI, PostgreSQL, Docker
+- Architected and deployed a containerized microservice capable of handling 4,500+ requests per second with sub-40ms latency.
+- Implemented JWT authentication, connection pooling, and optimized SQL queries to reduce DB query times by 35%.
+
+AutoPlace Campus Placement Portal | React, TypeScript, FastAPI, SQLite
+- Designed an intelligent placement automation tool with real-time ATS resume screening and conflict-free interview chamber scheduling.
+- Integrated automated email notifications and eligibility validation engine adhering to institutional norms.
+
+CERTIFICATIONS & ACHIEVEMENTS
+- Finalist, National Smart India Hackathon
+- LeetCode Knight (Top 5% globally, 500+ DSA problems solved)"""
+        },
+        {
+            "reg_no": "241FA05001",
+            "full_name": "Priya Nair",
+            "email": "241fa05001@vignan.ac.in",
+            "degree": "B.Tech",
+            "branch": "AI_DS",
+            "cgpa": 8.40,
+            "target_role": "AI & Machine Learning Engineer",
+            "target_company": "Amazon",
+            "skills": ["Python", "Machine Learning", "PyTorch", "SQL", "Data Structures", "Git"],
+            "resume_text": """Priya Nair
+241fa05001@vignan.ac.in | +91 9123456780 | Vadlamudi, AP | linkedin.com/in/priyanair | github.com/priyanair
+
+PROFESSIONAL SUMMARY
+Motivated Artificial Intelligence & Data Science student with practical experience in deep learning models, data analytics, and PyTorch pipelines.
+
+EDUCATION
+Vignan's Foundation for Science, Technology and Research (VFSTR)
+Bachelor of Technology in Artificial Intelligence & Data Science
+CGPA: 8.40 / 10.0 | Expected Graduation: May 2028
+
+TECHNICAL SKILLS
+- Languages: Python, SQL
+- ML & AI: Machine Learning, PyTorch, Scikit-Learn, Pandas, NumPy
+- Core: Data Structures, Linear Algebra, Probability, Git
+
+PROJECTS
+Vision-Based Quality Inspection | Python, PyTorch, OpenCV
+- Developed CNN classification pipeline achieving 94.2% accuracy on anomaly detection.
+- Utilized data augmentation and transfer learning to reduce training time by 40%."""
+        }
+    ]
+
+    for s in sample_students:
+        s_user = User(
+            identifier=s["reg_no"],
+            email=s["email"],
+            hashed_password=default_pw,
+            role="student",
+            full_name=s["full_name"]
+        )
+        db.add(s_user)
+        db.commit()
+        db.refresh(s_user)
+
+        ats_eval = calculate_ats_score(s["resume_text"], s["skills"])
+        # In 2026, 231 batch B.Tech is 4th Year, 241 batch B.Tech is 3rd Year
+        start_yr = int("20" + s["reg_no"][:2])
+        profile = StudentProfile(
+            user_id=s_user.id,
+            reg_no=s["reg_no"],
+            degree=s["degree"],
+            duration_years=4,
+            start_year=start_yr,
+            end_year=start_yr + 4,
+            branch=s["branch"],
+            cgpa=s["cgpa"],
+            active_backlogs=0,
+            skills_json=json.dumps(s["skills"]),
+            resume_text=s["resume_text"],
+            ats_score=ats_eval.get("ats_score", 82),
+            ats_feedback_json=json.dumps(ats_eval.get("feedback", [])),
+            target_role=s["target_role"],
+            target_company=s["target_company"],
+            placement_status="UNPLACED"
+        )
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+
+    print("Database initialized successfully with sample accounts (Admin, Recruiters, and Verified Students)!")
     db.commit()
     db.close()
-    print("Database re-seeded successfully with genuine non-hardcoded data!")
 
 if __name__ == "__main__":
     seed_database(force_recreate=True)

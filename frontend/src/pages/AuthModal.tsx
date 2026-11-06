@@ -41,6 +41,7 @@ export const AuthModal: React.FC<Props> = ({ isOpen, defaultRole, onClose, onLog
   const [companyName, setCompanyName] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [invitationCode, setInvitationCode] = useState('');
+  const [adminKey, setAdminKey] = useState('VFSTR-ADMIN-SECURE-2026');
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -119,8 +120,9 @@ export const AuthModal: React.FC<Props> = ({ isOpen, defaultRole, onClose, onLog
           payload.company_name = companyName.trim();
           payload.employee_id = employeeId.trim();
           payload.invitation_code = invitationCode.trim().toUpperCase();
-        } else {
+        } else if (role === 'admin') {
           payload.email = identifier.trim().toLowerCase();
+          payload.invitation_code = adminKey.trim();
         }
 
         const res = await registerUser(payload);
@@ -235,7 +237,7 @@ export const AuthModal: React.FC<Props> = ({ isOpen, defaultRole, onClose, onLog
           <div>
             <div className="flex justify-between items-center mb-1">
               <label className="block font-bold text-slate-700 uppercase">
-                {role === 'student' ? 'VFSTR Registration Number' : 'Official Corporate Work Email'}
+                {role === 'student' ? 'VFSTR Registration Number' : role === 'admin' ? 'Institutional Administrator Email' : 'Official Corporate Work Email'}
               </label>
               {role === 'student' && (
                 <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
@@ -250,7 +252,7 @@ export const AuthModal: React.FC<Props> = ({ isOpen, defaultRole, onClose, onLog
               required
               maxLength={role === 'student' ? 10 : undefined}
               className="w-full border border-slate-300 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-              placeholder={role === 'student' ? 'e.g. 211FA05001' : 'recruiter@amazon.com'}
+              placeholder={role === 'student' ? 'e.g. 211FA05001' : role === 'admin' ? 'dean_placements@vignan.ac.in' : 'recruiter@amazon.com'}
               value={identifier}
               onChange={e => setIdentifier(role === 'student' ? e.target.value.toUpperCase() : e.target.value)}
             />
@@ -361,6 +363,90 @@ export const AuthModal: React.FC<Props> = ({ isOpen, defaultRole, onClose, onLog
                 <p className="text-[10px] text-slate-400 mt-1">Provided by VFSTR T&P Cell for approved recruiting companies.</p>
               </div>
             </>
+          )}
+
+          {!isLogin && role === 'admin' && (
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="block font-bold text-slate-700 uppercase">Master Admin Invitation Key</label>
+                <button
+                  type="button"
+                  onClick={() => setAdminKey('VFSTR-ADMIN-SECURE-2026')}
+                  className="text-[10px] bg-purple-50 text-purple-700 hover:bg-purple-100 font-bold px-2 py-0.5 rounded-lg border border-purple-200"
+                >
+                  Use Demo Key
+                </button>
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  required
+                  className="w-full border border-slate-300 rounded-xl p-2.5 text-sm pl-9 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  placeholder="VFSTR-ADMIN-SECURE-2026"
+                  value={adminKey}
+                  onChange={e => setAdminKey(e.target.value)}
+                />
+                <KeyRound size={16} className="absolute left-3 top-3 text-slate-400" />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">Authorized security key issued by VFSTR Placement Administration.</p>
+            </div>
+          )}
+
+          {isLogin && role === 'admin' && (
+            <div className="bg-purple-50 border border-purple-200 rounded-2xl p-3 flex justify-between items-center">
+              <div>
+                <div className="text-xs font-bold text-purple-900">Dean / HOD Verified Account</div>
+                <div className="text-[11px] text-purple-700 font-mono">dean_placements@vignan.ac.in</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIdentifier('dean_placements@vignan.ac.in');
+                  setPassword('vignan123');
+                }}
+                className="text-xs bg-purple-600 hover:bg-purple-700 text-white font-bold px-3 py-1.5 rounded-xl shadow-sm"
+              >
+                Auto-Fill
+              </button>
+            </div>
+          )}
+
+          {isLogin && role === 'recruiter' && (
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3 flex justify-between items-center">
+              <div>
+                <div className="text-xs font-bold text-blue-900">Amazon Campus Lead</div>
+                <div className="text-[11px] text-blue-700 font-mono">recruiter@amazon.com</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIdentifier('recruiter@amazon.com');
+                  setPassword('vignan123');
+                }}
+                className="text-xs bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1.5 rounded-xl shadow-sm"
+              >
+                Auto-Fill
+              </button>
+            </div>
+          )}
+
+          {isLogin && role === 'student' && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3 flex justify-between items-center">
+              <div>
+                <div className="text-xs font-bold text-emerald-900">VFSTR Candidate (4th Year CSE)</div>
+                <div className="text-[11px] text-emerald-700 font-mono">231FA05001</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIdentifier('231FA05001');
+                  setPassword('vignan123');
+                }}
+                className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-xl shadow-sm"
+              >
+                Auto-Fill
+              </button>
+            </div>
           )}
 
           <div>

@@ -353,12 +353,12 @@ def get_demo_personas(db: Session = Depends(get_db)):
 
     personas = []
 
-    # Student 1: With Resume
-    s1 = db.query(User).filter(User.identifier == "211FA05001").first()
+    # Student 1: 4th Year With Resume (Eligible for Full-Time Drives)
+    s1 = db.query(User).filter(User.identifier.in_(["231FA05001", "211FA05001"])).first()
     if s1 and s1.student_profile:
         t1 = create_access_token({"sub": str(s1.id), "role": "student", "identifier": s1.identifier})
         personas.append({
-            "label": "Rahul Sharma (4th Year CSE | With Resume)",
+            "label": f"{s1.full_name} (4th Year CSE | With Resume)",
             "role": "student",
             "identifier": s1.identifier,
             "token": t1,
@@ -369,12 +369,12 @@ def get_demo_personas(db: Session = Depends(get_db)):
             "email": s1.email
         })
 
-    # Student 2: Fresh User
-    s_new = db.query(User).filter(User.identifier == "241FA05999").first()
+    # Student 2: 3rd Year (Eligible for Internship Drives)
+    s_new = db.query(User).filter(User.identifier.in_(["241FA05001", "241FA05999"])).first()
     if s_new and s_new.student_profile:
         t_new = create_access_token({"sub": str(s_new.id), "role": "student", "identifier": s_new.identifier})
         personas.append({
-            "label": "Fresh Student (New User | No Resume | Real 0 ATS)",
+            "label": f"{s_new.full_name} (3rd Year AI_DS | Intern Ready)",
             "role": "student",
             "identifier": s_new.identifier,
             "token": t_new,
