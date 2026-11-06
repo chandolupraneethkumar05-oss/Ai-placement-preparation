@@ -9,15 +9,13 @@ from app.api import auth_routes, student_routes, recruiter_routes, admin_routes
 from app.core.config import FRONTEND_URL
 from seed_data import seed_database
 
-# Create DB tables
-Base.metadata.create_all(bind=engine)
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
+        Base.metadata.create_all(bind=engine)
         seed_database()
     except Exception as e:
-        print(f"Startup seed notice: {e}")
+        print(f"Startup DB initialization notice: {e}")
     yield
 
 app = FastAPI(

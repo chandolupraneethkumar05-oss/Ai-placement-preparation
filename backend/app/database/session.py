@@ -14,6 +14,8 @@ else:
         "pool_size": 10,
         "max_overflow": 20
     })
+    if ("render.com" in DATABASE_URL or "neon.tech" in DATABASE_URL or "supabase.co" in DATABASE_URL) and "sslmode" not in DATABASE_URL:
+        engine_kwargs["connect_args"] = {"sslmode": "require"}
 
 engine = create_engine(DATABASE_URL, **engine_kwargs)
 

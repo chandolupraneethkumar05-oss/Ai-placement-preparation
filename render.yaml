@@ -1,18 +1,9 @@
-databases:
-  # =========================================================================
-  # Permanent PostgreSQL Database (Managed by Render)
-  # Persistent storage: all accounts, resumes, tests remain permanently!
-  # =========================================================================
-  - name: autoplace-db
-    databaseName: autoplace_db
-    user: autoplace_user
-    plan: free
-
 services:
   # =========================================================================
   # Unified Full-Stack Service: React Frontend + FastAPI Backend
   # Serves the complete application on a SINGLE URL and SINGLE service!
   # Zero CORS, Zero cross-origin "Failed to fetch", 100% Free Plan ($0/month).
+  # Supports SQLite out-of-the-box and PostgreSQL via DATABASE_URL env var.
   # =========================================================================
   - type: web
     name: ai-placement-preparation
@@ -24,8 +15,6 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: DATABASE_URL
-        fromDatabase:
-          name: autoplace-db
-          property: connectionString
+        value: sqlite:///./placement.db
       - key: SECRET_KEY
         generateValue: true
