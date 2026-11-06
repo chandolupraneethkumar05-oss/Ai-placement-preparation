@@ -13,6 +13,7 @@ import { StudentDashboard } from './pages/StudentDashboard';
 import { RecruiterDashboard } from './pages/RecruiterDashboard';
 import { AdminDashboard } from './pages/AdminDashboard';
 import { LandingPage } from './pages/LandingPage';
+import { AICopilotDrawer } from './components/AICopilotDrawer';
 import { Bell, LogIn, Menu, X, CheckCircle2 } from 'lucide-react';
 
 export function App() {
@@ -353,6 +354,9 @@ export function App() {
           </div>
         </div>
       )}
+
+      {/* Universal AI Placement & Resume Copilot (Floating) */}
+      <AICopilotDrawer session={session} />
 
     </div>
   );

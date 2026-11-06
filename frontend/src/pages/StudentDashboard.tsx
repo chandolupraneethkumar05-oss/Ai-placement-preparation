@@ -35,7 +35,8 @@ import {
   ArrowRight,
   ShieldAlert,
   Compass,
-  Lock
+  Lock,
+  Sliders
 } from 'lucide-react';
 
 interface Props {
@@ -92,6 +93,18 @@ export const StudentDashboard: React.FC<Props> = ({
   const [selectedRoadmap, setSelectedRoadmap] = useState<any>(null);
   const [mockModalCompany, setMockModalCompany] = useState<string | null>(null);
   const [hallTicketAppId, setHallTicketAppId] = useState<number | null>(null);
+
+  // What-If Career & Eligibility Simulator State
+  const [simCgpa, setSimCgpa] = useState<number>(7.5);
+  const [simBacklogs, setSimBacklogs] = useState<number>(0);
+  const [showSimulator, setShowSimulator] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (profile) {
+      setSimCgpa(profile.cgpa);
+      setSimBacklogs(profile.active_backlogs);
+    }
+  }, [profile]);
 
   const profileId = session.profile_id || 1;
 
@@ -195,6 +208,11 @@ export const StudentDashboard: React.FC<Props> = ({
   };
 
   const hasResume = Boolean(profile && profile.has_resume && profile.ats_score > 0);
+
+  // What-If Career Simulation Computations
+  const simEligibleJobs = jobs.filter(j => simCgpa >= j.min_cgpa && simBacklogs <= (j.max_backlogs ?? j.eligibility_diagnostics?.backlogs?.allowed ?? 0));
+  const newlyUnlocked = simEligibleJobs.filter(j => !j.is_eligible);
+  const maxUnlockedCtc = simEligibleJobs.length > 0 ? Math.max(...simEligibleJobs.map(j => j.ctc_lpa)) : 0;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6 sm:space-y-8">
@@ -386,6 +404,109 @@ export const StudentDashboard: React.FC<Props> = ({
       {/* TAB 1: LIVE DRIVES */}
       {activeTab === 'jobs' && (
         <div className="space-y-6">
+          
+          {/* What-If Career & Eligibility Simulator Card */}
+          <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-5 sm:p-6 shadow-md border border-indigo-800 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-indigo-400/30 uppercase tracking-wider flex items-center space-x-1">
+                    <Sparkles size={11} className="text-yellow-300" />
+                    <span>Predictive Eligibility Engine</span>
+                  </span>
+                  <span className="text-[10px] text-indigo-300">Live Academic Simulator</span>
+                </div>
+                <h3 className="text-base sm:text-lg font-black tracking-tight text-white">
+                  What-If Career & Eligibility Simulator
+                </h3>
+                <p className="text-xs text-indigo-200/80">
+                  Simulate how upcoming semester SGPA/CGPA growth or clearing active backlogs will unlock Tier-1 company drives.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setShowSimulator(!showSimulator)}
+                className="bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs px-4 py-2 rounded-xl transition flex items-center space-x-1.5 shadow"
+              >
+                <Sliders size={14} className="text-indigo-300" />
+                <span>{showSimulator ? "Hide Simulator" : "Open What-If Simulator"}</span>
+              </button>
+            </div>
+
+            {showSimulator && (
+              <div className="bg-black/30 rounded-2xl p-4 sm:p-5 border border-white/10 space-y-4 pt-3 text-xs animate-in fade-in duration-200">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  {/* CGPA Slider */}
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <label className="font-bold uppercase tracking-wider text-[11px] text-indigo-200">
+                        Simulated CGPA:
+                      </label>
+                      <span className="font-mono font-black text-sm text-yellow-300 bg-yellow-400/20 px-2.5 py-0.5 rounded border border-yellow-400/30">
+                        {simCgpa.toFixed(2)} / 10.0
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="6.0"
+                      max="10.0"
+                      step="0.05"
+                      value={simCgpa}
+                      onChange={e => setSimCgpa(parseFloat(e.target.value))}
+                      className="w-full accent-indigo-400 cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[10px] text-indigo-300/60 font-mono">
+                      <span>6.0 (Passing)</span>
+                      <span>Current: {profile?.cgpa.toFixed(2)}</span>
+                      <span>10.0 (Perfect)</span>
+                    </div>
+                  </div>
+
+                  {/* Backlogs Selector */}
+                  <div className="space-y-2">
+                    <label className="font-bold uppercase tracking-wider text-[11px] text-indigo-200 block">
+                      Simulated Active Backlogs:
+                    </label>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[0, 1, 2, 3].map(bl => (
+                        <button
+                          key={bl}
+                          type="button"
+                          onClick={() => setSimBacklogs(bl)}
+                          className={`py-2 rounded-xl font-bold text-xs transition border ${
+                            simBacklogs === bl
+                              ? 'bg-indigo-600 text-white border-indigo-400 shadow-md ring-2 ring-indigo-400/50'
+                              : 'bg-white/5 hover:bg-white/10 text-indigo-200 border-white/10'
+                          }`}
+                        >
+                          {bl === 0 ? "0 (Clean)" : `${bl} Backlog${bl > 1 ? 's' : ''}`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Outcome Simulation Banner */}
+                <div className="p-3.5 bg-gradient-to-r from-emerald-500/20 to-teal-500/10 border border-emerald-400/30 rounded-xl space-y-1">
+                  <div className="font-bold text-emerald-300 text-xs flex items-center space-x-1.5">
+                    <CheckCircle2 size={14} />
+                    <span>
+                      Simulation Result: You qualify for {simEligibleJobs.length} of {jobs.length} campus drives!
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-200 leading-relaxed">
+                    Under these parameters, your highest unlockable salary is <strong>₹{maxUnlockedCtc} LPA</strong>.
+                    {newlyUnlocked.length > 0 && (
+                      <span className="text-yellow-300 font-semibold block mt-0.5">
+                        ✨ Unlocks {newlyUnlocked.length} new drive(s): {newlyUnlocked.map(j => `${j.company} (₹${j.ctc_lpa} LPA)`).join(", ")}!
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-between items-center">
             <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">
               Active Placement Drives at VFSTR

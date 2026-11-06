@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database.session import engine, Base
-from app.api import auth_routes, student_routes, recruiter_routes, admin_routes
+from app.api import auth_routes, student_routes, recruiter_routes, admin_routes, copilot_routes, ingestion_routes
 from app.core.config import FRONTEND_URL
 from seed_data import seed_database
 
@@ -56,6 +56,9 @@ app.include_router(auth_routes.router)
 app.include_router(student_routes.router)
 app.include_router(recruiter_routes.router)
 app.include_router(admin_routes.router)
+app.include_router(copilot_routes.router, prefix="/api")
+app.include_router(copilot_routes.router)
+app.include_router(ingestion_routes.router)
 
 @app.get("/health")
 def liveness_check():
@@ -93,7 +96,7 @@ if FRONTEND_DIST:
     async def serve_spa(full_path: str):
         # Allow native FastAPI routes and documentation
         clean_p = full_path.strip().lower()
-        if clean_p.startswith(("docs", "redoc", "openapi.json", "auth", "student", "recruiter", "admin", "health")):
+        if clean_p.startswith(("docs", "redoc", "openapi.json", "auth", "student", "recruiter", "admin", "health", "copilot", "api")):
             raise HTTPException(status_code=404, detail="API route not found")
         file_path = os.path.join(FRONTEND_DIST, full_path)
         if full_path and os.path.isfile(file_path):

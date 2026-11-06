@@ -77,6 +77,7 @@ export interface JobCard {
   ctc_lpa: number;
   job_type: string;
   min_cgpa: number;
+  max_backlogs?: number;
   eligible_branches: string[];
   required_skills: string[];
   deadline: string;

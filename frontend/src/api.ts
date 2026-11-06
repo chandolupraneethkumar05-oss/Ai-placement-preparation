@@ -528,3 +528,136 @@ export async function downloadPlacementsCsv(filename = "placements_export.csv") 
   a.remove();
   window.URL.revokeObjectURL(url);
 }
+
+// -------------------------------------------------------------
+// AI Placement Copilot & Campus-Scale Ingestion Endpoints
+// -------------------------------------------------------------
+
+export async function sendCopilotChat(payload: {
+  message: string;
+  user_name?: string;
+  user_role?: string;
+  student_id?: number;
+  target_role?: string;
+  context_topic?: string;
+}) {
+  const res = await fetch(`${API_BASE}/api/copilot/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Copilot communication failed");
+  }
+  return res.json();
+}
+
+export async function optimizeResumeWithCopilot(payload: {
+  student_id: number;
+  target_role?: string;
+  target_company?: string;
+  current_resume_text?: string;
+}) {
+  const res = await fetch(`${API_BASE}/api/copilot/optimize-resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Resume optimization failed");
+  }
+  return res.json();
+}
+
+export async function downloadSampleRosterCsv(filename = "VFSTR_Student_Roster_Template.csv") {
+  const res = await fetch(`${API_BASE}/admin/students/sample-csv`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) throw new Error("Failed to download template");
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function importStudentsCsv(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${API_BASE}/admin/students/import-csv`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: formData
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "CSV import failed");
+  }
+  return res.json();
+}
+
+export async function generateDemoCohort(count = 100, batchYear = 2022) {
+  const res = await fetch(`${API_BASE}/admin/students/generate-cohort`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ count, batch_year: batchYear })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to generate cohort");
+  }
+  return res.json();
+}
+
+export async function fetchStudentsPaginated(params: {
+  page?: number;
+  limit?: number;
+  search?: string;
+  branch?: string;
+  placement_status?: string;
+}) {
+  const query = new URLSearchParams();
+  if (params.page) query.append("page", String(params.page));
+  if (params.limit) query.append("limit", String(params.limit));
+  if (params.search) query.append("search", params.search);
+  if (params.branch) query.append("branch", params.branch);
+  if (params.placement_status) query.append("placement_status", params.placement_status);
+
+  const res = await fetch(`${API_BASE}/admin/all-students-paginated?${query.toString()}`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) return { students: [], total: 0, page: 1, limit: 20, total_pages: 1 };
+  return res.json();
+}
+
+export async function draftDriveAnnouncementEmail(jobId: number, customNotes?: string) {
+  const res = await fetch(`${API_BASE}/admin/drives/${jobId}/draft-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ custom_notes: customNotes || "" })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to draft announcement email");
+  }
+  return res.json();
+}
+
+export async function dispatchDriveAnnouncementEmail(jobId: number, subject: string, bodyHtml: string) {
+  const res = await fetch(`${API_BASE}/admin/drives/${jobId}/send-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ subject, body_html: bodyHtml })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to dispatch email broadcast");
+  }
+  return res.json();
+}
