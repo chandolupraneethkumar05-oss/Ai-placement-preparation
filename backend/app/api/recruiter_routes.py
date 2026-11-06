@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.database.session import get_db
 from app.models.all_models import RecruiterProfile, Company, JobPosting, Application, InterviewSchedule, Notification, StudentProfile
 from app.ai_engine.venue_manager import VFSTR_CAMPUS_VENUES, DEFAULT_TIME_SLOTS, check_slot_collision, suggest_available_slots
-from app.services.email_service import send_interview_pass_email, send_shortlist_email
+from app.services.email_service import send_interview_pass_email, send_shortlist_email, send_reschedule_email
 from app.core.security import get_current_user_payload
 
 router = APIRouter(prefix="/recruiter", tags=["Recruiter Portal"])
@@ -250,9 +250,19 @@ def allocate_slot(req: AllocateSlotRequest, db: Session = Depends(get_db), auth_
     if col_check["collision"]:
         raise HTTPException(status_code=409, detail=col_check["reason"])
 
-    # 2. Assign / Update Slot
+    # 2. Assign / Update Slot (Detect Rescheduling)
     existing_slot = db.query(InterviewSchedule).filter(InterviewSchedule.application_id == req.application_id).first()
+    is_reschedule = False
+    old_details = None
+
     if existing_slot:
+        is_reschedule = True
+        old_details = {
+            "block": existing_slot.block_name,
+            "chamber": existing_slot.chamber_name,
+            "date": existing_slot.slot_date,
+            "time": existing_slot.slot_time
+        }
         existing_slot.block_name = req.block_name
         existing_slot.chamber_name = req.chamber_name
         existing_slot.slot_date = req.slot_date
@@ -277,29 +287,54 @@ def allocate_slot(req: AllocateSlotRequest, db: Session = Depends(get_db), auth_
     app.status = "Shortlisted (Slot Confirmed)"
     db.commit()
 
-    # 4. In-App Notification
-    notif = Notification(
-        user_id=app.student.user_id,
-        title=f"📅 Interview Pass Confirmed: {app.job.company.name}",
-        message=f"Your slot is confirmed: {req.slot_date} at {req.slot_time} in {req.block_name} ({req.chamber_name})."
-    )
+    company_name = app.job.company.name if app.job and app.job.company else "Corporate Partner"
+    job_title = app.job.title if app.job else "Campus Drive"
+
+    # 4. In-App Notification (Distinguishes initial booking from reschedule)
+    if is_reschedule:
+        notif = Notification(
+            user_id=app.student.user_id,
+            title=f"⚠️ Change Happened in Your Drive: {company_name}",
+            message=f"Change happened in your drive: Your interview slot for '{job_title}' was rescheduled by the recruiter. New Schedule: {req.slot_date} at {req.slot_time} in {req.block_name} ({req.chamber_name}). Please regenerate your Hall Ticket."
+        )
+    else:
+        notif = Notification(
+            user_id=app.student.user_id,
+            title=f"📅 Interview Pass Confirmed: {company_name}",
+            message=f"Your slot is confirmed: {req.slot_date} at {req.slot_time} in {req.block_name} ({req.chamber_name})."
+        )
     db.add(notif)
     db.commit()
 
     # 5. Registered Email Dispatch via Resend API
-    send_interview_pass_email(
-        student_email=app.student.user.email,
-        student_name=app.student.user.full_name,
-        company=app.job.company.name,
-        job_title=app.job.title,
-        block=req.block_name,
-        chamber=req.chamber_name,
-        slot_time=req.slot_time,
-        slot_date=req.slot_date
-    )
+    if is_reschedule and old_details:
+        email_dispatch = send_reschedule_email(
+            student_email=app.student.user.email,
+            student_name=app.student.user.full_name,
+            company=company_name,
+            job_title=job_title,
+            old_details=old_details,
+            new_block=req.block_name,
+            new_chamber=req.chamber_name,
+            new_slot_time=req.slot_time,
+            new_slot_date=req.slot_date
+        )
+    else:
+        email_dispatch = send_interview_pass_email(
+            student_email=app.student.user.email,
+            student_name=app.student.user.full_name,
+            company=company_name,
+            job_title=job_title,
+            block=req.block_name,
+            chamber=req.chamber_name,
+            slot_time=req.slot_time,
+            slot_date=req.slot_date
+        )
 
+    action_msg = "Interview slot rescheduled! Urgent change notification dispatched to candidate." if is_reschedule else "Interview slot allocated with zero conflicts! Pass sent to student email."
     return {
-        "message": "Interview slot allocated with zero conflicts! Pass sent to student email.",
+        "message": action_msg,
+        "is_reschedule": is_reschedule,
         "status": app.status,
         "slot": {
             "block": req.block_name,

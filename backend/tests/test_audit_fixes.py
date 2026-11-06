@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database.session import Base, get_db
-from app.models.all_models import User, StudentProfile, Company, RecruiterProfile, JobPosting, Application, InterviewSchedule
+from app.models.all_models import User, StudentProfile, Company, RecruiterProfile, JobPosting, Application, InterviewSchedule, Notification
 from app.core.security import get_password_hash, create_access_token
 from app.ai_engine.resume_extractor import ai_enhance_bullet, ai_generate_summary, calculate_ats_score
 from app.ai_engine.venue_manager import check_slot_collision
@@ -273,3 +273,49 @@ def test_admin_toggle_company_verification():
     )
     assert res_analytics.json()["verified_companies"] == 4
     db.close()
+
+def test_slot_reschedule_dispatches_change_notification():
+    """Real-life requirement: If recruiter modifies slot allocation, send 'Change happened in your drive' alert."""
+    db = TestingSessionLocal()
+    appl = db.query(Application).first()
+    rec_user = db.query(User).filter(User.role == "recruiter").first()
+    token = create_access_token({"sub": str(rec_user.id), "role": "recruiter", "email": rec_user.email})
+
+    # 1. Initial Slot Allocation
+    res1 = client.post(
+        "/recruiter/allocate-slot",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "application_id": appl.id,
+            "block_name": "A Block",
+            "chamber_name": "Chamber A-101",
+            "slot_date": "2026-11-20",
+            "slot_time": "10:00 AM - 10:30 AM"
+        }
+    )
+    assert res1.status_code == 200
+    assert res1.json()["is_reschedule"] is False
+
+    # 2. Recruiter Modifies/Reschedules the Slot
+    res2 = client.post(
+        "/recruiter/allocate-slot",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "application_id": appl.id,
+            "block_name": "H Block",
+            "chamber_name": "Seminar Hall H-2",
+            "slot_date": "2026-11-21",
+            "slot_time": "02:00 PM - 02:30 PM"
+        }
+    )
+    assert res2.status_code == 200
+    assert res2.json()["is_reschedule"] is True
+    assert "rescheduled" in res2.json()["message"].lower()
+
+    # 3. Verify in-app notification in DB contains "Change happened in your drive"
+    notifs = db.query(Notification).filter(Notification.user_id == appl.student.user_id).all()
+    change_notif = next((n for n in notifs if "Change Happened in Your Drive" in n.title), None)
+    assert change_notif is not None
+    assert "rescheduled by the recruiter" in change_notif.message
+    db.close()
+

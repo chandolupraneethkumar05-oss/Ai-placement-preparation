@@ -53,7 +53,6 @@ def send_shortlist_email(
       </body>
     </html>
     """
-
     return _dispatch_email(student_email, subject, html_body)
 
 def send_interview_pass_email(
@@ -112,7 +111,77 @@ def send_interview_pass_email(
       </body>
     </html>
     """
+    return _dispatch_email(student_email, subject, html_body)
 
+def send_reschedule_email(
+    student_email: str,
+    student_name: str,
+    company: str,
+    job_title: str,
+    old_details: dict,
+    new_block: str,
+    new_chamber: str,
+    new_slot_time: str,
+    new_slot_date: str = ""
+) -> dict:
+    """
+    Dispatches high-priority HTML reschedule notification to student registered email
+    whenever recruiter modifies an allocated interview slot.
+    """
+    safe_name = html.escape(student_name or "Candidate")
+    safe_company = html.escape(company or "Corporate Partner")
+    safe_title = html.escape(job_title or "Campus Recruitment")
+    safe_old_date = html.escape(old_details.get("date") or "Previous Date")
+    safe_old_time = html.escape(old_details.get("time") or "Previous Time")
+    safe_old_venue = html.escape(f"{old_details.get('block', 'Venue')} - {old_details.get('chamber', 'Chamber')}")
+    
+    safe_new_block = html.escape(new_block or "Assigned Block")
+    safe_new_chamber = html.escape(new_chamber or "Panel Chamber")
+    safe_new_time = html.escape(new_slot_time or "Scheduled Slot")
+    safe_new_date = html.escape(new_slot_date or "Scheduled Date")
+
+    subject = f"⚠️ Schedule Change: {company} - {job_title} Interview Updated | VFSTR Placements"
+    html_body = f"""
+    <html>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 24px; color: #0f172a; background-color: #f8fafc; line-height: 1.5;">
+        <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 16px; border: 1px solid #fecaca; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+          <div style="background: linear-gradient(135deg, #b91c1c, #991b1b); color: white; padding: 24px;">
+            <div style="font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; color: #fca5a5;">Training & Placement Cell</div>
+            <h2 style="margin: 8px 0 0 0; font-size: 20px; font-weight: 800;">⚠️ Interview Schedule Updated</h2>
+          </div>
+          <div style="padding: 28px;">
+            <p style="font-size: 15px; margin-top: 0;">Dear <b>{safe_name}</b>,</p>
+            <p style="font-size: 14px; color: #334155;">
+              A <b>change happened in your drive</b>. Your interview schedule for <b>{safe_company}</b> ({safe_title}) has been modified by the recruiter.
+            </p>
+            
+            <div style="background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #ef4444; padding: 14px 18px; border-radius: 8px; margin: 16px 0;">
+              <div style="font-size: 12px; font-weight: bold; color: #991b1b; text-transform: uppercase;">Previous Schedule (Cancelled):</div>
+              <p style="margin: 4px 0 0 0; font-size: 13px; color: #7f1d1d; text-decoration: line-through;">
+                {safe_old_venue} on {safe_old_date} at {safe_old_time}
+              </p>
+            </div>
+
+            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-left: 4px solid #16a34a; padding: 16px 18px; border-radius: 8px; margin: 16px 0;">
+              <div style="font-size: 12px; font-weight: bold; color: #166534; text-transform: uppercase;">✅ New Confirmed Schedule:</div>
+              <p style="margin: 6px 0 2px 0; font-size: 14px; color: #14532d;"><b>🏢 Venue:</b> {safe_new_block} — {safe_new_chamber}</p>
+              <p style="margin: 2px 0; font-size: 14px; color: #14532d;"><b>📅 Date:</b> {safe_new_date}</p>
+              <p style="margin: 2px 0; font-size: 14px; color: #14532d;"><b>⏰ Time:</b> {safe_new_time}</p>
+            </div>
+
+            <p style="font-size: 13px; color: #475569; margin-top: 20px;">
+              <b>Action Required:</b> Please log in to your student portal to view the updated details and download your refreshed <b>Digital QR Hall Ticket</b> reflecting the new venue and timings.
+            </p>
+
+            <p style="font-size: 12px; color: #64748b; margin-top: 24px;">
+              Central Training & Placement Cell<br>
+              Vignan's Foundation for Science, Technology and Research (VFSTR)
+            </p>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
     return _dispatch_email(student_email, subject, html_body)
 
 def _dispatch_email(recipient_email: str, subject: str, html_content: str) -> dict:
