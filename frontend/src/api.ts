@@ -407,7 +407,7 @@ export async function autoScheduleBatch(payload: {
   interview_date?: string;
   default_venue?: string;
 }) {
-  const res = await fetch(`${API_BASE}/recruiter/auto-schedule-batch`, {
+  const res = await fetch(`${API_BASE}/recruiter/auto-schedule-batch/${payload.job_id}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(payload)
@@ -440,7 +440,11 @@ export async function fetchPendingDrives() {
     headers: getAuthHeaders()
   });
   if (!res.ok) return { pending_drives: [], total: 0 };
-  return res.json();
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { pending_drives: data, total: data.length };
+  }
+  return data;
 }
 
 export async function approveDrive(jobId: number, deanRemarks?: string) {
@@ -461,6 +465,7 @@ export async function renewMOUAndApprove(jobId: number, durationYears: number, d
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({
+      extension_years: durationYears,
       duration_years: durationYears,
       dean_remarks: deanRemarks || `Renewed MOU for ${durationYears} year(s) and approved drive.`
     })
@@ -476,7 +481,7 @@ export async function rejectDrive(jobId: number, reason: string) {
   const res = await fetch(`${API_BASE}/admin/reject-drive/${jobId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
-    body: JSON.stringify({ reason })
+    body: JSON.stringify({ remarks: reason, reason: reason })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -490,21 +495,42 @@ export async function fetchMOURegistry() {
     headers: getAuthHeaders()
   });
   if (!res.ok) return { registry: [], total: 0 };
-  return res.json();
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { registry: data, total: data.length };
+  }
+  return data;
 }
 
 export async function registerMOU(payload: {
   company_id: number;
-  mou_reference_code: string;
-  signed_date: string;
-  expiry_date: string;
+  mou_reference_code?: string;
+  mou_reference_no?: string;
+  signed_date?: string;
+  mou_valid_from?: string;
+  expiry_date?: string;
+  mou_valid_till?: string;
   category?: string;
+  mou_category?: string;
   functional_activities?: string;
+  mou_notes?: string;
 }) {
   const res = await fetch(`${API_BASE}/admin/register-mou`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
-    body: JSON.stringify(payload)
+    body: JSON.stringify({
+      company_id: payload.company_id,
+      mou_reference_no: payload.mou_reference_no || payload.mou_reference_code,
+      mou_reference_code: payload.mou_reference_code || payload.mou_reference_no,
+      mou_valid_from: payload.mou_valid_from || payload.signed_date,
+      signed_date: payload.signed_date || payload.mou_valid_from,
+      mou_valid_till: payload.mou_valid_till || payload.expiry_date,
+      expiry_date: payload.expiry_date || payload.mou_valid_till,
+      mou_category: payload.mou_category || payload.category,
+      category: payload.category || payload.mou_category,
+      mou_notes: payload.mou_notes || payload.functional_activities,
+      functional_activities: payload.functional_activities || payload.mou_notes
+    })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -514,7 +540,7 @@ export async function registerMOU(payload: {
 }
 
 export async function downloadPlacementsCsv(filename = "placements_export.csv") {
-  const res = await fetch(`${API_BASE}/admin/export-placements-csv`, {
+  const res = await fetch(`${API_BASE}/admin/export-placement-csv`, {
     headers: getAuthHeaders()
   });
   if (!res.ok) throw new Error("Failed to export placements data");

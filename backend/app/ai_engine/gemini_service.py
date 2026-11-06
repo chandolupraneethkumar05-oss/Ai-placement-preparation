@@ -7,16 +7,22 @@ from typing import Optional, List, Dict, Any
 
 from app.core.config import GEMINI_API_KEY
 
+def is_gemini_configured() -> bool:
+    """Returns True if a non-empty Gemini API key is configured."""
+    return bool(GEMINI_API_KEY and GEMINI_API_KEY.strip())
+
 def call_gemini_api(prompt: str, api_key: Optional[str] = None, system_instruction: Optional[str] = None) -> Optional[str]:
     """
     Direct HTTP call to Google Gemini API (no external heavy SDK needed).
     Prioritizes api_key passed in request, then falls back to GEMINI_API_KEY environment variable.
+    Redacts keys from error logs and handles quota limits gracefully.
     """
     key = (api_key or GEMINI_API_KEY or "").strip()
     if not key:
         return None
 
-    models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-pro"]
+    # Modern production Gemini model fallback chain
+    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
     
     payload: Dict[str, Any] = {
         "contents": [
@@ -57,13 +63,20 @@ def call_gemini_api(prompt: str, api_key: Optional[str] = None, system_instructi
                     if parts:
                         return parts[0].get("text", "")
         except urllib.error.HTTPError as e:
-            # Try next model if 404 or model not found
+            # 429: Rate limit or quota exhausted
+            if e.code == 429:
+                print(f"[Gemini Service Notice] Rate limit or quota reached on {model}. Falling back to internal engine.")
+                break
+            # Try next model if 404 or 400
             if e.code in [404, 400] and model != models[-1]:
                 continue
-            print(f"Gemini API HTTP Error ({model}): {e.code} - {e.reason}")
+            print(f"[Gemini Service Notice] HTTP Error ({model}): {e.code} - {e.reason}")
+            break
+        except (urllib.error.URLError, TimeoutError) as e:
+            print(f"[Gemini Service Notice] Network timeout or connection failure for {model}: {e}")
             break
         except Exception as e:
-            print(f"Gemini API call notice: {e}")
+            print(f"[Gemini Service Notice] General request error: {e}")
             break
 
     return None

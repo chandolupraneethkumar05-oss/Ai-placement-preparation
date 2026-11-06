@@ -2,35 +2,53 @@ import csv
 import io
 import statistics
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Any
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+
 from app.database.session import get_db
 from app.models.all_models import StudentProfile, Company, JobPosting, Application, User, Notification
-from app.core.security import require_admin_role, get_current_user_payload
+from app.core.security import require_admin_role
 from app.core.events import broadcaster
 
 router = APIRouter(prefix="/admin", tags=["College Administration (Dean / HOD)"])
 
+def sanitize_csv_cell(val: Any) -> Any:
+    """Prevents CSV formula injection (CWE-1236) by neutralizing formula trigger characters."""
+    if val is None:
+        return ""
+    s = str(val)
+    if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return f"'{s}"
+    return s
+
 class RegisterMOURequest(BaseModel):
     company_id: int
-    mou_reference_no: str
-    mou_valid_from: str
-    mou_valid_till: str
-    mou_category: str = "Tier-1 Strategic Hiring & Internship"
+    mou_reference_no: Optional[str] = None
+    mou_reference_code: Optional[str] = None
+    mou_valid_from: Optional[str] = None
+    signed_date: Optional[str] = None
+    mou_valid_till: Optional[str] = None
+    expiry_date: Optional[str] = None
+    mou_category: Optional[str] = "Tier-1 Strategic Hiring & Internship"
+    category: Optional[str] = None
     mou_notes: Optional[str] = None
+    functional_activities: Optional[str] = None
 
 class RenewMOURequest(BaseModel):
-    extension_years: int = 3
+    extension_years: Optional[int] = None
+    duration_years: Optional[int] = None
+    dean_remarks: Optional[str] = None
     new_reference_no: Optional[str] = None
 
 class RejectDriveRequest(BaseModel):
-    remarks: str
+    remarks: Optional[str] = None
+    reason: Optional[str] = None
 
 @router.get("/all-students")
-def get_all_students(db: Session = Depends(get_db)):
+def get_all_students(db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """Full institutional view of all student performance metrics across all departments."""
     students = db.query(StudentProfile).all()
     results = []
@@ -53,7 +71,7 @@ def get_all_students(db: Session = Depends(get_db)):
     return results
 
 @router.get("/analytics")
-def get_admin_analytics(db: Session = Depends(get_db)):
+def get_admin_analytics(db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """
     Returns authentic, real-time institutional metrics computed directly from database tables.
     Includes active drives, functional MOUs, and NAAC accreditation parameters.
@@ -113,10 +131,11 @@ def get_admin_analytics(db: Session = Depends(get_db)):
     }
 
 @router.get("/pending-drives")
-def get_pending_drives(db: Session = Depends(get_db)):
+def get_pending_drives(db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """
     Dean's Approval Queue:
     Returns drives submitted by recruiters awaiting institutional MOU compliance check and official release.
+    Returns both dictionary wrapper 'pending_drives' and total for robust frontend compatibility.
     """
     drives = db.query(JobPosting).filter(JobPosting.status == "PENDING_DEAN_APPROVAL").all()
     results = []
@@ -145,7 +164,7 @@ def get_pending_drives(db: Session = Depends(get_db)):
     return results
 
 @router.post("/approve-drive/{job_id}")
-async def approve_drive(job_id: int, db: Session = Depends(get_db)):
+async def approve_drive(job_id: int, db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """
     Dean's Approval Action:
     Verifies the drive meets university criteria, marks it as ACTIVE, and dispatches real-time SSE event to all students.
@@ -158,7 +177,6 @@ async def approve_drive(job_id: int, db: Session = Depends(get_db)):
     job.approved_at = datetime.now(timezone.utc)
     db.commit()
 
-    # Dispatches smart notification to students matching criteria
     all_students = db.query(StudentProfile).all()
     notified = 0
     clean_branches = [b.upper() for b in job.eligible_branches]
@@ -175,7 +193,6 @@ async def approve_drive(job_id: int, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # Broadcast real-time SSE push so student dashboard updates instantly
     await broadcaster.broadcast("new_drive_published", {
         "job_id": job.id,
         "title": job.title,
@@ -193,10 +210,11 @@ async def approve_drive(job_id: int, db: Session = Depends(get_db)):
     }
 
 @router.post("/renew-mou-and-approve/{job_id}")
-async def renew_mou_and_approve(job_id: int, req: RenewMOURequest, db: Session = Depends(get_db)):
+async def renew_mou_and_approve(job_id: int, req: RenewMOURequest, db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """
     Partnership Renewal & Approval Action:
-    Renews an expired company MOU for 1-3 years and simultaneously approves the campus drive.
+    Renews an expired company MOU for 1-5 years and simultaneously approves the campus drive.
+    Accepts both extension_years and duration_years for cross-version compatibility.
     """
     job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not job:
@@ -206,26 +224,25 @@ async def renew_mou_and_approve(job_id: int, req: RenewMOURequest, db: Session =
     if not company:
         raise HTTPException(status_code=404, detail="Company profile not found")
 
-    ext_years = max(1, min(5, req.extension_years))
-    new_till_year = 2026 + ext_years
+    raw_years = req.extension_years or req.duration_years or 3
+    ext_years = max(1, min(5, int(raw_years)))
+    new_till_year = datetime.now(timezone.utc).year + ext_years
     new_till_date = f"{new_till_year}-05-31"
 
     # Update company MOU
     company.mou_status = "ACTIVE"
     company.is_verified = True
-    company.mou_valid_from = "2026-06-01"
+    company.mou_valid_from = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     company.mou_valid_till = new_till_date
     if req.new_reference_no:
         company.mou_reference_no = req.new_reference_no
     else:
-        company.mou_reference_no = f"VFSTR-MOU-{company.name[:3].upper()}-2026-R{ext_years}"
+        company.mou_reference_no = f"VFSTR-MOU-{company.name[:3].upper()}-{new_till_year}-R{ext_years}"
 
-    # Approve Drive
     job.status = "ACTIVE"
     job.approved_at = datetime.now(timezone.utc)
     db.commit()
 
-    # Dispatches smart notification to students matching criteria
     all_students = db.query(StudentProfile).all()
     clean_branches = [b.upper() for b in job.eligible_branches]
     notified = 0
@@ -261,22 +278,22 @@ async def renew_mou_and_approve(job_id: int, req: RenewMOURequest, db: Session =
     }
 
 @router.post("/reject-drive/{job_id}")
-def reject_drive(job_id: int, req: RejectDriveRequest, db: Session = Depends(get_db)):
-    """Allows Dean to reject a drive or request revisions."""
+def reject_drive(job_id: int, req: RejectDriveRequest, db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
+    """Allows Dean to reject a drive or request revisions. Accepts both remarks and reason."""
     job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Drive posting not found")
 
+    feedback = (req.remarks or req.reason or "Drive rejected by Dean of Placements.").strip()
     job.status = "REJECTED"
-    job.dean_remarks = req.remarks
+    job.dean_remarks = feedback
     db.commit()
 
-    # Notify recruiter
     if job.recruiter:
         notif = Notification(
             user_id=job.recruiter.user_id,
             title=f"⚠️ Campus Drive Review Update: {job.title}",
-            message=f"Your drive posting for '{job.title}' was reviewed by Dean of Placements. Remarks: {req.remarks}"
+            message=f"Your drive posting for '{job.title}' was reviewed by Dean of Placements. Remarks: {feedback}"
         )
         db.add(notif)
         db.commit()
@@ -284,11 +301,11 @@ def reject_drive(job_id: int, req: RejectDriveRequest, db: Session = Depends(get
     return {
         "message": f"Drive '{job.title}' rejected. Feedback remarks dispatched to recruiter.",
         "status": "REJECTED",
-        "remarks": req.remarks
+        "remarks": feedback
     }
 
 @router.get("/mou-registry")
-def get_mou_registry(db: Session = Depends(get_db)):
+def get_mou_registry(db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """Institutional Memorandum of Understanding Registry for NAAC Criterion 3.5 & NBA accreditation."""
     companies = db.query(Company).all()
     results = []
@@ -313,17 +330,23 @@ def get_mou_registry(db: Session = Depends(get_db)):
     return results
 
 @router.post("/register-mou")
-def register_or_update_mou(req: RegisterMOURequest, db: Session = Depends(get_db)):
+def register_or_update_mou(req: RegisterMOURequest, db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """Enables Dean to execute or update bilateral institutional MOUs with corporate partners."""
     company = db.query(Company).filter(Company.id == req.company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
 
-    company.mou_reference_no = req.mou_reference_no
-    company.mou_valid_from = req.mou_valid_from
-    company.mou_valid_till = req.mou_valid_till
-    company.mou_category = req.mou_category
-    company.mou_notes = req.mou_notes
+    ref_no = req.mou_reference_no or req.mou_reference_code or f"VFSTR-MOU-{company.name[:3].upper()}-2026"
+    valid_from = req.mou_valid_from or req.signed_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    valid_till = req.mou_valid_till or req.expiry_date or "2028-05-31"
+    category = req.mou_category or req.category or "Tier-1 Strategic Hiring & Internship"
+    notes = req.mou_notes or req.functional_activities or ""
+
+    company.mou_reference_no = ref_no
+    company.mou_valid_from = valid_from
+    company.mou_valid_till = valid_till
+    company.mou_category = category
+    company.mou_notes = notes
     company.mou_status = "ACTIVE"
     company.is_verified = True
     db.commit()
@@ -337,7 +360,7 @@ def register_or_update_mou(req: RegisterMOURequest, db: Session = Depends(get_db
     }
 
 @router.get("/companies")
-def get_all_companies(db: Session = Depends(get_db)):
+def get_all_companies(db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """Returns complete list of corporate recruiting partners with their genuine verification and MOU state."""
     companies = db.query(Company).all()
     return [
@@ -357,7 +380,7 @@ def get_all_companies(db: Session = Depends(get_db)):
     ]
 
 @router.post("/verify-company/{company_id}")
-def toggle_company_verification(company_id: int, db: Session = Depends(get_db)):
+def toggle_company_verification(company_id: int, db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """Allows Dean/HOD to verify or unverify a company."""
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
@@ -374,7 +397,7 @@ def toggle_company_verification(company_id: int, db: Session = Depends(get_db)):
     }
 
 @router.get("/export-nirf-summary")
-def export_nirf_summary(db: Session = Depends(get_db)):
+def export_nirf_summary(db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
     """Computes genuine NIRF / NAAC metrics derived directly from verified database records."""
     total = db.query(StudentProfile).count()
     placed = db.query(StudentProfile).filter(StudentProfile.placement_status.in_(["TIER_1", "TIER_2"])).count()
@@ -400,9 +423,7 @@ def export_nirf_summary(db: Session = Depends(get_db)):
         "naac_criterion_3_5_mou_count": db.query(Company).filter(Company.mou_status == "ACTIVE").count()
     }
 
-@router.get("/export-placement-csv")
-def export_placement_csv(db: Session = Depends(get_db)):
-    """Exports full institutional placement records as a downloadable CSV for NAAC / NIRF accreditation."""
+def generate_placement_csv_response(db: Session):
     students = db.query(StudentProfile).all()
     output = io.StringIO()
     writer = csv.writer(output)
@@ -418,17 +439,17 @@ def export_placement_csv(db: Session = Depends(get_db)):
         ctc = placed_app.job.ctc_lpa if placed_app and placed_app.job else 0.0
         
         writer.writerow([
-            s.reg_no,
-            s.user.full_name if s.user else "N/A",
-            s.user.email if s.user else "N/A",
-            s.degree,
-            s.branch,
-            s.cgpa,
-            s.placement_status,
-            comp_name,
-            ctc,
-            s.ats_score,
-            len(s.applications)
+            sanitize_csv_cell(s.reg_no),
+            sanitize_csv_cell(s.user.full_name if s.user else "N/A"),
+            sanitize_csv_cell(s.user.email if s.user else "N/A"),
+            sanitize_csv_cell(s.degree),
+            sanitize_csv_cell(s.branch),
+            sanitize_csv_cell(s.cgpa),
+            sanitize_csv_cell(s.placement_status),
+            sanitize_csv_cell(comp_name),
+            sanitize_csv_cell(ctc),
+            sanitize_csv_cell(s.ats_score),
+            sanitize_csv_cell(len(s.applications))
         ])
         
     output.seek(0)
@@ -437,3 +458,13 @@ def export_placement_csv(db: Session = Depends(get_db)):
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=VFSTR_Institutional_Placement_Report_2026.csv"}
     )
+
+@router.get("/export-placement-csv")
+def export_placement_csv(db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
+    """Exports full institutional placement records as a downloadable CSV for NAAC / NIRF accreditation."""
+    return generate_placement_csv_response(db)
+
+@router.get("/export-placements-csv")
+def export_placements_csv_alias(db: Session = Depends(get_db), auth: dict = Depends(require_admin_role)):
+    """Canonical alias preventing 404 on pluralized placements CSV route."""
+    return generate_placement_csv_response(db)

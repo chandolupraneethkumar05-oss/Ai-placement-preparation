@@ -1,10 +1,15 @@
+import os
 import json
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+import hmac
+import hashlib
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
+
 from app.database.session import get_db
-from app.models.all_models import StudentProfile, JobPosting, Application, Notification, DriveAttendance
+from app.models.all_models import StudentProfile, JobPosting, Application, Notification, DriveAttendance, InterviewSchedule
 from app.ai_engine.year_calculator import parse_vfstr_reg_no
 from app.ai_engine.eligibility import check_student_eligibility
 from app.ai_engine.matcher import calculate_match_score
@@ -20,8 +25,39 @@ from app.ai_engine.resume_extractor import (
 from app.ai_engine.company_rounds import get_company_rounds
 from app.ai_engine.pyq_rag_engine import fetch_pyq_for_company, evaluate_pyq_response
 from app.core.security import get_current_user_payload
+from app.core.config import SECRET_KEY
 
 router = APIRouter(prefix="/student", tags=["Student Portal"])
+
+def generate_hall_ticket_token(reg_no: str, app_id: int, slot_id: int, slot_date: str, slot_time: str) -> str:
+    """Generates a tamper-proof HMAC verification token."""
+    msg = f"{reg_no}:{app_id}:{slot_id}:{slot_date}:{slot_time}".encode("utf-8")
+    sig = hmac.new(SECRET_KEY.encode("utf-8"), msg, hashlib.sha256).hexdigest()[:16].upper()
+    return f"VFSTR-{reg_no}-{app_id}-{slot_id}-{sig}"
+
+def verify_student_ownership(student_profile: StudentProfile, auth_payload: Optional[dict]):
+    """
+    Protects against Insecure Direct Object References (IDOR).
+    Requires authenticated session matching the student's account.
+    """
+    if not auth_payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Authentication required. Please sign in to access student data."
+        )
+    role = auth_payload.get("role")
+    if role in ("admin", "recruiter"):
+        return
+    if role != "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Access forbidden: Student privileges required."
+        )
+    if str(student_profile.user_id) != str(auth_payload.get("sub")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Security Violation: You are not authorized to view or mutate another student's profile or applications."
+        )
 
 class UpdateTargetRoleRequest(BaseModel):
     target_role: str
@@ -61,17 +97,12 @@ class MockSubmissionRequest(BaseModel):
     student_answer: str
     api_key: Optional[str] = None
 
-def verify_student_ownership(student_profile: StudentProfile, auth_payload: Optional[dict]):
-    """Protects against Insecure Direct Object References (IDOR)."""
-    if auth_payload and auth_payload.get("role") == "student":
-        if str(student_profile.user_id) != str(auth_payload.get("sub")):
-            raise HTTPException(
-                status_code=403, 
-                detail="Security Violation: You are not authorized to view or mutate another student's profile or applications."
-            )
-
 @router.get("/profile/{student_id}")
-def get_student_profile(student_id: int, db: Session = Depends(get_db), auth_payload: dict = Depends(get_current_user_payload)):
+def get_student_profile(
+    student_id: int, 
+    db: Session = Depends(get_db), 
+    auth_payload: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student profile not found")
@@ -111,7 +142,12 @@ def get_student_profile(student_id: int, db: Session = Depends(get_db), auth_pay
     }
 
 @router.post("/upload-resume/{student_id}")
-async def upload_resume(student_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), auth: dict = Depends(get_current_user_payload)):
+async def upload_resume(
+    student_id: int, 
+    file: UploadFile = File(...), 
+    db: Session = Depends(get_db), 
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -155,10 +191,15 @@ async def upload_resume(student_id: int, file: UploadFile = File(...), db: Sessi
     }
 
 @router.get("/resume-builder/{student_id}")
-def get_resume_builder_data(student_id: int, db: Session = Depends(get_db)):
+def get_resume_builder_data(
+    student_id: int, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
 
     builder_data = {}
     if profile.resume_builder_json:
@@ -219,22 +260,23 @@ def get_resume_builder_data(student_id: int, db: Session = Depends(get_db)):
     }
 
 @router.put("/resume-builder/{student_id}")
-def save_resume_builder_data(student_id: int, req: SaveResumeBuilderRequest, db: Session = Depends(get_db)):
+def save_resume_builder_data(
+    student_id: int, 
+    req: SaveResumeBuilderRequest, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
 
-    # 1. Convert JSON to clean standard plain-text for ATS scanning
     plain_text = convert_builder_json_to_text(req.builder_data)
-    
-    # 2. Extract genuine skills against institutional taxonomy
     extracted_skills = extract_skills_from_text(plain_text)
     
-    # 3. Calculate genuine role-aware ATS score
     target_role_to_use = req.target_role or profile.target_role or ""
     ats_result = calculate_ats_score(plain_text, extracted_skills, target_role=target_role_to_use)
 
-    # 4. Save to DB
     profile.resume_builder_json = json.dumps(req.builder_data)
     profile.resume_text = plain_text
     profile.skills = extracted_skills
@@ -248,10 +290,8 @@ def save_resume_builder_data(student_id: int, req: SaveResumeBuilderRequest, db:
     db.commit()
 
     return {
-        "message": "Resume builder saved and genuine ATS score calculated.",
-        "ats_score": profile.ats_score,
-        "skills_extracted": extracted_skills,
-        "verdict": ats_result["verdict"],
+        "message": "Resume builder saved and ATS rescan complete.",
+        "ats_score": ats_result["ats_score"],
         "breakdown": {
             "contact": ats_result.get("contact_score", 0),
             "sections": ats_result.get("sections_score", 0),
@@ -259,114 +299,113 @@ def save_resume_builder_data(student_id: int, req: SaveResumeBuilderRequest, db:
             "metrics": ats_result.get("metrics_score", 0),
             "formatting": ats_result.get("formatting_score", 0)
         },
-        "strengths": ats_result.get("strengths", []),
+        "recommendations": ats_result["recommendations"]
+    }
+
+@router.put("/target-role/{student_id}")
+def update_target_role(
+    student_id: int, 
+    req: UpdateTargetRoleRequest, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
+    profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
+
+    new_role = req.target_role.strip()
+    profile.target_role = new_role
+    
+    if profile.resume_text:
+        ats_result = calculate_ats_score(profile.resume_text, profile.skills, target_role=new_role)
+        profile.ats_score = ats_result["ats_score"]
+        profile.ats_feedback_json = json.dumps(ats_result["recommendations"])
+    
+    db.commit()
+    return {
+        "message": f"Target role set to {new_role}",
+        "target_role": new_role,
+        "ats_score": profile.ats_score
+    }
+
+@router.put("/manual-resume/{student_id}")
+def update_manual_resume(
+    student_id: int, 
+    req: UpdateResumeManualRequest, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
+    profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
+
+    profile.skills = req.skills
+    profile.resume_text = req.resume_text
+    if req.target_role:
+        profile.target_role = req.target_role
+
+    ats_result = calculate_ats_score(req.resume_text, req.skills, target_role=profile.target_role or "")
+    profile.ats_score = ats_result["ats_score"]
+    profile.ats_feedback_json = json.dumps(ats_result["recommendations"])
+    db.commit()
+
+    return {
+        "message": "Profile updated manually and rescanned.",
+        "ats_score": ats_result["ats_score"],
         "recommendations": ats_result["recommendations"]
     }
 
 @router.post("/resume-ai/enhance-bullet")
-def enhance_bullet(req: AIBulletEnhanceRequest):
-    from app.ai_engine.gemini_service import optimize_bullet_with_gemini
-    if req.api_key or os.getenv("GEMINI_API_KEY"):
-        gemini_res = optimize_bullet_with_gemini(req.bullet_text, req.target_role, api_key=req.api_key)
-        if gemini_res:
-            return gemini_res
-    return ai_enhance_bullet(req.bullet_text, req.target_role or "Software Engineer")
+def enhance_bullet_api(req: AIBulletEnhanceRequest):
+    return {"enhanced_bullet": ai_enhance_bullet(req.bullet_text, req.target_role or "Software Engineer")}
 
 @router.post("/resume-ai/generate-summary")
-def generate_summary(req: AISummaryRequest):
-    summary = ai_generate_summary(req.name, req.target_role, req.skills)
-    return {"summary": summary}
+def generate_summary_api(req: AISummaryRequest):
+    return {"summary": ai_generate_summary(req.name, req.target_role, req.skills)}
 
 @router.post("/evaluate-ats-preview")
-def preview_ats_score(req: ATSPreviewRequest):
-    text = ""
-    if req.builder_data:
-        text = convert_builder_json_to_text(req.builder_data)
-    elif req.resume_text:
-        text = req.resume_text
-
-    skills = extract_skills_from_text(text)
-    ats_result = calculate_ats_score(text, skills, target_role=req.target_role or "")
-    return ats_result
-
-@router.put("/target-role/{student_id}")
-def update_target_role(student_id: int, req: UpdateTargetRoleRequest, db: Session = Depends(get_db)):
-    profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    profile.target_role = req.target_role
-
-    # Dynamic Rescanning: If resume exists, rescan against the new target role!
-    if profile.resume_text and len(profile.resume_text.strip()) > 20:
-        extracted_skills = extract_skills_from_text(profile.resume_text)
-        ats_result = calculate_ats_score(profile.resume_text, extracted_skills, target_role=req.target_role)
-        profile.skills = extracted_skills
-        profile.ats_score = ats_result["ats_score"]
-        profile.ats_feedback_json = json.dumps(ats_result["recommendations"])
-
-    db.commit()
-    return {
-        "message": "Target role saved and resume rescanned against role requirements",
-        "target_role": profile.target_role,
-        "ats_score": profile.ats_score,
-        "feedback": json.loads(profile.ats_feedback_json) if profile.ats_feedback_json else []
-    }
-
-@router.put("/manual-resume/{student_id}")
-def update_manual_resume(student_id: int, req: UpdateResumeManualRequest, db: Session = Depends(get_db)):
-    profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    ats_result = calculate_ats_score(req.resume_text, req.skills, target_role=req.target_role or profile.target_role or "")
-    profile.skills = req.skills
-    profile.resume_text = req.resume_text
-    profile.ats_score = ats_result["ats_score"]
-    profile.ats_feedback_json = json.dumps(ats_result["recommendations"])
-    if req.target_role:
-        profile.target_role = req.target_role
-
-    db.commit()
-    return {
-        "message": "Resume updated successfully",
-        "ats_score": profile.ats_score,
-        "feedback": ats_result["recommendations"]
-    }
+def evaluate_ats_preview(req: ATSPreviewRequest):
+    text_to_eval = req.resume_text or ""
+    if not text_to_eval and req.builder_data:
+        text_to_eval = convert_builder_json_to_text(req.builder_data)
+    skills = extract_skills_from_text(text_to_eval)
+    return calculate_ats_score(text_to_eval, skills, target_role=req.target_role or "")
 
 @router.get("/jobs/{student_id}")
-def get_jobs_for_student(student_id: int, db: Session = Depends(get_db)):
+def get_jobs_for_student(
+    student_id: int, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
 
     jobs = db.query(JobPosting).filter(JobPosting.status == "ACTIVE").all()
     results = []
 
-    applied_dict = {app.job_id: app.status for app in profile.applications}
+    applied_dict = {a.job_id: a.status for a in profile.applications}
 
     for job in jobs:
         eligibility = check_student_eligibility(profile, job)
         match = calculate_match_score(profile.skills, profile.resume_text, job.title, job.required_skills, job.description)
         rounds = get_company_rounds(job.company.name if job.company else "")
-
-        target_role_match = bool(
-            profile.target_role and (
-                profile.target_role.lower() in job.title.lower() or 
-                job.title.lower() in profile.target_role.lower() or
-                (job.target_role_category and profile.target_role.lower() in job.target_role_category.lower())
-            )
-        )
+        target_role_match = bool(profile.target_role and profile.target_role.lower() in job.title.lower())
 
         results.append({
             "job_id": job.id,
             "title": job.title,
-            "company": job.company.name if job.company else "Campus Drive",
-            "company_mou_ref": getattr(job.company, "mou_reference_no", "") if job.company else "",
-            "company_mou_status": getattr(job.company, "mou_status", "ACTIVE") if job.company else "ACTIVE",
+            "company": job.company.name if job.company else "",
+            "mou_status": getattr(job.company, "mou_status", "ACTIVE"),
+            "company_mou_ref": getattr(job.company, "mou_reference_no", ""),
+            "company_mou_status": getattr(job.company, "mou_status", "ACTIVE"),
             "ctc_lpa": job.ctc_lpa,
             "job_type": job.job_type,
             "min_cgpa": job.min_cgpa,
+            "max_backlogs": job.max_backlogs,
             "eligible_branches": job.eligible_branches,
             "required_skills": job.required_skills,
             "deadline": job.deadline,
@@ -382,16 +421,19 @@ def get_jobs_for_student(student_id: int, db: Session = Depends(get_db)):
             "application_status": applied_dict.get(job.id, None)
         })
 
-    # Sort: Target role matches & eligible first, then by match score
     results.sort(key=lambda x: (x["target_role_match"], x["is_eligible"], x["match_score"]), reverse=True)
     return results
 
 @router.get("/attendance/{student_id}")
-def get_student_placement_attendance(student_id: int, db: Session = Depends(get_db)):
-    """Fetches verified campus placement drive stage attendance records."""
+def get_student_placement_attendance(
+    student_id: int, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
 
     records = db.query(DriveAttendance).filter(DriveAttendance.student_id == student_id).order_by(DriveAttendance.check_in_time.desc()).all()
     results = []
@@ -417,18 +459,25 @@ def get_student_placement_attendance(student_id: int, db: Session = Depends(get_
     }
 
 @router.post("/apply/{student_id}/{job_id}")
-def apply_job(student_id: int, job_id: int, db: Session = Depends(get_db), auth: dict = Depends(get_current_user_payload)):
+def apply_job(
+    student_id: int, 
+    job_id: int, 
+    db: Session = Depends(get_db), 
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not profile or not job:
         raise HTTPException(status_code=404, detail="Student or Job not found")
     verify_student_ownership(profile, auth)
 
-    # STRICT GUARDRAIL: Skill gap roadmap requires an authentic uploaded or built resume
+    if job.status != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Cannot apply: Recruitment drive is currently pending Dean approval or closed.")
+
     if not profile.resume_text or len(profile.resume_text.strip()) < 30:
         raise HTTPException(
             status_code=400,
-            detail="Resume required. Please upload your PDF/Word resume or complete the Talent Shine Builder first before generating a personalized skill remediation roadmap."
+            detail="Resume required. Please upload your PDF/Word resume or complete the Talent Shine Builder first before applying."
         )
 
     existing = db.query(Application).filter(Application.student_id == student_id, Application.job_id == job_id).first()
@@ -458,10 +507,19 @@ def apply_job(student_id: int, job_id: int, db: Session = Depends(get_db), auth:
     db.add(notif)
     db.commit()
 
-    return {"message": "Application submitted", "status": "Applied"}
+    return {
+        "message": "Application submitted successfully!",
+        "application_id": app.id,
+        "is_eligible": eligibility["is_eligible"],
+        "match_score": match["match_score"]
+    }
 
 @router.get("/applications/{student_id}")
-def get_student_applications(student_id: int, db: Session = Depends(get_db), auth: dict = Depends(get_current_user_payload)):
+def get_student_applications(
+    student_id: int, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -471,18 +529,16 @@ def get_student_applications(student_id: int, db: Session = Depends(get_db), aut
     results = []
     for a in apps:
         slot = a.interview_slot
-        rounds = get_company_rounds(a.job.company.name if a.job.company else "")
-
         results.append({
-            "id": a.id,
+            "application_id": a.id,
             "job_id": a.job_id,
-            "job_title": a.job.title,
-            "company": a.job.company.name,
-            "ctc_lpa": a.job.ctc_lpa,
+            "job_title": a.job.title if a.job else "Position",
+            "company_name": a.job.company.name if a.job and a.job.company else "Company",
+            "company_mou_status": getattr(a.job.company, "mou_status", "ACTIVE") if a.job else "ACTIVE",
             "status": a.status,
             "match_score": a.match_score,
+            "is_eligible": a.is_eligible,
             "applied_at": a.applied_at.isoformat() if a.applied_at else "",
-            "recruitment_rounds": rounds,
             "interview_slot": {
                 "block": slot.block_name,
                 "chamber": slot.chamber_name,
@@ -495,11 +551,15 @@ def get_student_applications(student_id: int, db: Session = Depends(get_db), aut
     return results
 
 @router.get("/shortlisted-interviews/{student_id}")
-def get_shortlisted_interviews(student_id: int, db: Session = Depends(get_db)):
-    """Returns only the companies where this student is officially shortlisted/confirmed."""
+def get_shortlisted_interviews(
+    student_id: int, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
-        raise HTTPException(status_code=404, detail="Student profile not found")
+        raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
 
     results = []
     for app in profile.applications:
@@ -532,13 +592,14 @@ def get_mock_interview(
     student_id: Optional[int] = None, 
     exclude: Optional[str] = None,
     api_key: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
 ):
     target_role = "Software Engineer"
-    # STRICT GUARDRAIL: Candidate MUST be officially shortlisted by the company to unlock interview assessment!
     if student_id:
         profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
         if profile:
+            verify_student_ownership(profile, auth)
             target_role = profile.target_role or "Software Engineer"
             is_shortlisted = any(
                 (app.job and app.job.company and app.job.company.name.lower() == company_name.lower()) and
@@ -576,30 +637,50 @@ def evaluate_mock(req: MockSubmissionRequest):
 @router.post("/optimize-bullet")
 def optimize_bullet(req: AIBulletEnhanceRequest):
     from app.ai_engine.gemini_service import optimize_bullet_with_gemini
-    # 1. Try Gemini STAR optimization if API key provided
     if req.api_key or os.getenv("GEMINI_API_KEY"):
         gemini_res = optimize_bullet_with_gemini(req.bullet_text, req.target_role, api_key=req.api_key)
         if gemini_res:
             return {"optimized_bullet": gemini_res, "engine": "Google Gemini STAR Optimizer"}
-    # 2. Local rule-based STAR transformation fallback
     enhanced = ai_enhance_bullet(req.bullet_text, req.target_role or "Software Engineer")
     return {"optimized_bullet": enhanced, "engine": "VFSTR Institutional STAR Engine"}
 
 @router.get("/hall-ticket/{student_id}/{application_id}")
-def get_hall_ticket(student_id: int, application_id: int, db: Session = Depends(get_db)):
+def get_hall_ticket(
+    student_id: int, 
+    application_id: int, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
+    """
+    Issues official placement interview hall ticket and admit card.
+    Strictly verifies student ownership and requires confirmed interview slot (no placeholder data).
+    Generates cryptographically unpredictable HMAC verification token.
+    """
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Student not found")
+    verify_student_ownership(profile, auth)
+
     app = db.query(Application).filter(Application.id == application_id, Application.student_id == student_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Application record not found")
     
-    if not ("shortlisted" in app.status.lower() or "confirmed" in app.status.lower()):
-        raise HTTPException(status_code=403, detail="Hall ticket is only issued for shortlisted / confirmed interviews.")
-
+    # Must have an allocated, confirmed interview schedule (never placeholder)
     slot = app.interview_slot
+    if not slot or slot.status != "CONFIRMED":
+        raise HTTPException(
+            status_code=400, 
+            detail="Hall ticket cannot be generated: Interview slot has not been confirmed yet. Please wait for the recruiter to allocate your chamber schedule."
+        )
+
     comp_name = app.job.company.name if app.job and app.job.company else "Recruiting Partner"
-    verification_hash = f"VFSTR-{profile.reg_no}-{app.id}-{slot.id if slot else '0'}-2026"
+    verification_hash = generate_hall_ticket_token(
+        reg_no=profile.reg_no,
+        app_id=app.id,
+        slot_id=slot.id,
+        slot_date=slot.slot_date,
+        slot_time=slot.slot_time
+    )
     
     return {
         "institution": "Vignan's Foundation for Science, Technology and Research",
@@ -612,11 +693,11 @@ def get_hall_ticket(student_id: int, application_id: int, db: Session = Depends(
         "company_name": comp_name,
         "job_title": app.job.title if app.job else "Campus Recruit",
         "ctc_lpa": app.job.ctc_lpa if app.job else 0.0,
-        "panel_name": slot.panel_name if slot else "Panel 1 - Technical Committee",
-        "block": slot.block_name if slot else "A-Block Placement Hub",
-        "chamber": slot.chamber_name if slot else "Interview Chamber 101",
-        "date": slot.slot_date if slot else "Scheduled Drive Day",
-        "time": slot.slot_time if slot else "10:00 AM - 10:45 AM",
+        "panel_name": slot.panel_name,
+        "block": slot.block_name,
+        "chamber": slot.chamber_name,
+        "date": slot.slot_date,
+        "time": slot.slot_time,
         "verification_hash": verification_hash,
         "instructions": [
             "Report to the assigned placement chamber 15 minutes prior to the scheduled slot.",
@@ -626,16 +707,72 @@ def get_hall_ticket(student_id: int, application_id: int, db: Session = Depends(
         ]
     }
 
+@router.get("/verify-admit-card/{token}")
+@router.get("/verify-hall-ticket/{token}")
+def verify_hall_ticket_token(token: str, db: Session = Depends(get_db)):
+    """
+    Verification endpoint for placement volunteers and panel heads to validate scanned admit card QR tokens.
+    """
+    clean_token = token.strip()
+    parts = clean_token.split("-")
+    if len(parts) < 5 or parts[0] != "VFSTR" or parts[1] != "PASS":
+        raise HTTPException(status_code=400, detail="Invalid token format. Not an official VFSTR admit pass.")
+
+    reg_no = parts[2]
+    try:
+        app_id = int(parts[3])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Malformed application identifier in token.")
+
+    app = db.query(Application).filter(Application.id == app_id).first()
+    if not app or app.student.reg_no != reg_no:
+        raise HTTPException(status_code=404, detail="Admit card record does not match any registered candidate.")
+
+    slot = app.interview_slot
+    if not slot:
+        raise HTTPException(status_code=400, detail="No interview slot linked to this admit card.")
+
+    expected_token = generate_hall_ticket_token(
+        reg_no=reg_no,
+        app_id=app.id,
+        slot_id=slot.id,
+        slot_date=slot.slot_date,
+        slot_time=slot.slot_time
+    )
+
+    if not hmac.compare_digest(clean_token, expected_token):
+        raise HTTPException(status_code=403, detail="Security Warning: Tampered or invalid verification token signature.")
+
+    return {
+        "valid": True,
+        "status": "OFFICIALLY_VERIFIED",
+        "candidate_name": app.student.user.full_name,
+        "reg_no": app.student.reg_no,
+        "branch": app.student.branch,
+        "company": app.job.company.name if app.job and app.job.company else "Partner Company",
+        "job_title": app.job.title if app.job else "Campus Drive",
+        "slot_date": slot.slot_date,
+        "slot_time": slot.slot_time,
+        "chamber": slot.chamber_name,
+        "block": slot.block_name,
+        "panel": slot.panel_name
+    }
+
 @router.get("/roadmap/{student_id}/{job_id}")
-def get_student_roadmap(student_id: int, job_id: int, db: Session = Depends(get_db)):
+def get_student_roadmap(
+    student_id: int, 
+    job_id: int, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(get_current_user_payload)
+):
     profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
     job = db.query(JobPosting).filter(JobPosting.id == job_id).first()
     if not profile or not job:
         raise HTTPException(status_code=404, detail="Student or Job not found")
+    verify_student_ownership(profile, auth)
 
     year_info = parse_vfstr_reg_no(profile.reg_no, profile.degree)
     
-    # Calculate real missing skills between student profile skills and job required skills
     student_skills_lower = [s.lower() for s in (profile.skills or [])]
     missing = [req for req in job.required_skills if req.lower() not in student_skills_lower]
 

@@ -207,16 +207,18 @@ def test_hall_ticket_and_shortlisted_interviews_attribute_fix():
     db = TestingSessionLocal()
     s_prof = db.query(StudentProfile).first()
     appl = db.query(Application).first()
+    s_token = create_access_token({"sub": str(s_prof.user_id), "role": "student", "identifier": s_prof.reg_no})
+    s_headers = {"Authorization": f"Bearer {s_token}"}
 
     # Shortlisted Interviews
-    res_interviews = client.get(f"/student/shortlisted-interviews/{s_prof.id}")
+    res_interviews = client.get(f"/student/shortlisted-interviews/{s_prof.id}", headers=s_headers)
     assert res_interviews.status_code == 200
     data_interviews = res_interviews.json()
     assert len(data_interviews) == 1
     assert data_interviews[0]["interview_slot"]["chamber"] == "Chamber A-204"
 
     # Hall Ticket
-    res_ticket = client.get(f"/student/hall-ticket/{s_prof.id}/{appl.id}")
+    res_ticket = client.get(f"/student/hall-ticket/{s_prof.id}/{appl.id}", headers=s_headers)
     assert res_ticket.status_code == 200
     ticket = res_ticket.json()
     assert "OFFICIAL PLACEMENT INTERVIEW HALL TICKET" in ticket["document_title"]
@@ -249,7 +251,9 @@ def test_recruiter_post_job_sets_pending_dean_approval():
     assert data["status"] == "PENDING_DEAN_APPROVAL"
 
     # Verify drive is in Dean's pending queue
-    res_pending = client.get("/admin/pending-drives")
+    admin_user = db.query(User).filter(User.role == "admin").first()
+    admin_token = create_access_token({"sub": str(admin_user.id), "role": "admin", "identifier": admin_user.identifier})
+    res_pending = client.get("/admin/pending-drives", headers={"Authorization": f"Bearer {admin_token}"})
     assert res_pending.status_code == 200
     pending_list = res_pending.json()
     cloud_drive = next((d for d in pending_list if d["title"] == "Cloud Architect"), None)
@@ -277,7 +281,9 @@ def test_dean_approves_active_mou_drive():
     db.add(pending_job)
     db.commit()
 
-    res_approve = client.post(f"/admin/approve-drive/{pending_job.id}")
+    admin_user = db.query(User).filter(User.role == "admin").first()
+    admin_token = create_access_token({"sub": str(admin_user.id), "role": "admin", "identifier": admin_user.identifier})
+    res_approve = client.post(f"/admin/approve-drive/{pending_job.id}", headers={"Authorization": f"Bearer {admin_token}"})
     assert res_approve.status_code == 200
     assert res_approve.json()["status"] == "ACTIVE"
 
@@ -306,8 +312,11 @@ def test_dean_renews_expired_mou_and_approves_drive():
     db.add(cts_job)
     db.commit()
 
+    admin_user = db.query(User).filter(User.role == "admin").first()
+    admin_token = create_access_token({"sub": str(admin_user.id), "role": "admin", "identifier": admin_user.identifier})
     res_renew = client.post(
         f"/admin/renew-mou-and-approve/{cts_job.id}",
+        headers={"Authorization": f"Bearer {admin_token}"},
         json={"extension_years": 3}
     )
     assert res_renew.status_code == 200
@@ -325,8 +334,10 @@ def test_recruiter_student_academic_dossier():
     """Recruiter views comprehensive semester-by-semester SGPA ledger and backlogs for candidate."""
     db = TestingSessionLocal()
     s_prof = db.query(StudentProfile).first()
+    rec_user = db.query(User).filter(User.role == "recruiter").first()
+    rec_token = create_access_token({"sub": str(rec_user.id), "role": "recruiter", "identifier": rec_user.identifier})
 
-    res = client.get(f"/recruiter/student-dossier/{s_prof.id}")
+    res = client.get(f"/recruiter/student-dossier/{s_prof.id}", headers={"Authorization": f"Bearer {rec_token}"})
     assert res.status_code == 200
     dossier = res.json()
     assert dossier["reg_no"] == "231FA05001"
@@ -358,7 +369,10 @@ def test_recruiter_auto_schedule_batch():
     db.add(app2)
     db.commit()
 
-    res_batch = client.post(f"/recruiter/auto-schedule-batch/{job.id}")
+    rec_user = job.recruiter.user
+    rec_token = create_access_token({"sub": str(rec_user.id), "role": "recruiter", "identifier": rec_user.identifier})
+
+    res_batch = client.post(f"/recruiter/auto-schedule-batch/{job.id}", headers={"Authorization": f"Bearer {rec_token}"})
     assert res_batch.status_code == 200
     data = res_batch.json()
     assert data["scheduled_count"] >= 1

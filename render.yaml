@@ -2,8 +2,8 @@ services:
   # =========================================================================
   # Unified Full-Stack Service: React Frontend + FastAPI Backend
   # Serves the complete application on a SINGLE URL and SINGLE service!
-  # Zero CORS, Zero cross-origin "Failed to fetch", 100% Free Plan ($0/month).
-  # Supports SQLite out-of-the-box and PostgreSQL via DATABASE_URL env var.
+  # Zero CORS, Zero cross-origin network latency, 100% Free Plan ($0/month).
+  # Uses Managed PostgreSQL Database for production persistence.
   # =========================================================================
   - type: web
     name: ai-placement-preparation
@@ -14,7 +14,18 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: APP_ENV
+        value: production
       - key: DATABASE_URL
-        value: sqlite:///./placement.db
+        fromDatabase:
+          name: ai-placement-db
+          property: connectionString
       - key: SECRET_KEY
         generateValue: true
+
+databases:
+  # Managed PostgreSQL Database for Production Persistence
+  - name: ai-placement-db
+    databaseName: placement_db
+    user: placement_user
+    plan: free

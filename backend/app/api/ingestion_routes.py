@@ -3,7 +3,8 @@ import csv
 import json
 import math
 import random
-from datetime import datetime
+import secrets
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
@@ -13,7 +14,7 @@ from sqlalchemy import or_, func
 
 from app.database.session import get_db
 from app.models.all_models import StudentProfile, User, AcademicSemesterRecord, JobPosting, Company
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, require_admin_role
 from app.ai_engine.resume_extractor import calculate_ats_score
 from app.ai_engine.year_calculator import parse_vfstr_reg_no
 from app.ai_engine.gemini_service import call_gemini_api
@@ -54,10 +55,15 @@ def download_sample_student_csv():
     )
 
 @router.post("/students/import-csv")
-async def import_students_from_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_students_from_csv(
+    file: UploadFile = File(...), 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_admin_role)
+):
     """
     High-throughput bulk ingestion pipeline for student records (100 to 10,000+ students).
     Validates, deduplicates by reg_no, auto-generates year info and semester dossiers.
+    Enforces secure, unique random credentials instead of predictable roll-number defaults.
     """
     contents = await file.read()
     text = contents.decode("utf-8", errors="ignore")
@@ -104,13 +110,14 @@ async def import_students_from_csv(file: UploadFile = File(...), db: Session = D
                 student_obj = existing
                 updated += 1
             else:
-                # Create user credentials if needed
                 user = db.query(User).filter(User.identifier == reg_no).first()
                 if not user:
+                    # Generate a secure cryptographically unguessable password
+                    secure_temp_pw = f"{reg_no}@{secrets.token_hex(4)}"
                     user = User(
                         identifier=reg_no,
                         email=email,
-                        hashed_password=get_password_hash(reg_no),  # Initial password is Roll No
+                        hashed_password=get_password_hash(secure_temp_pw),
                         role="student",
                         full_name=name
                     )
@@ -172,7 +179,11 @@ async def import_students_from_csv(file: UploadFile = File(...), db: Session = D
     }
 
 @router.post("/students/generate-cohort")
-def generate_sample_campus_cohort(payload: CohortGenerateRequest, db: Session = Depends(get_db)):
+def generate_sample_campus_cohort(
+    payload: CohortGenerateRequest, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_admin_role)
+):
     """
     Instantly generates 50 to 150 diverse students across VFSTR departments
     (CSE, IT, AI_DS, ECE, MECH, CIVIL) with realistic CGPAs, semester progression,
@@ -217,10 +228,11 @@ def generate_sample_campus_cohort(payload: CohortGenerateRequest, db: Session = 
         
         user = db.query(User).filter(User.identifier == reg_no).first()
         if not user:
+            secure_temp_pw = f"{reg_no}@{secrets.token_hex(4)}"
             user = User(
                 identifier=reg_no,
                 email=email,
-                hashed_password=get_password_hash(reg_no),
+                hashed_password=get_password_hash(secure_temp_pw),
                 role="student",
                 full_name=name
             )
@@ -263,7 +275,6 @@ def generate_sample_campus_cohort(payload: CohortGenerateRequest, db: Session = 
         db.add(student)
         db.flush()
 
-        # Add semester dossiers
         for sem in range(1, 8):
             sgpa = round(max(5.5, min(10.0, cgpa + random.uniform(-0.35, 0.35))), 2)
             db.add(AcademicSemesterRecord(
@@ -292,10 +303,12 @@ def get_all_students_paginated(
     search: Optional[str] = None,
     branch: Optional[str] = None,
     placement_status: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_admin_role)
 ):
     """
     High-speed paginated query engine supporting 10,000+ student records with zero latency.
+    Requires administrator authorization.
     """
     query = db.query(StudentProfile).join(User, StudentProfile.user_id == User.id)
 
@@ -346,7 +359,12 @@ def get_all_students_paginated(
     }
 
 @router.post("/drives/{job_id}/draft-email")
-def draft_drive_announcement_email(job_id: int, payload: EmailDraftRequest, db: Session = Depends(get_db)):
+def draft_drive_announcement_email(
+    job_id: int, 
+    payload: EmailDraftRequest, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_admin_role)
+):
     """
     Drafts an official, authoritative campus recruitment drive announcement email
     targeted to eligible candidates using Gemini or dynamic campus templates.
@@ -358,7 +376,6 @@ def draft_drive_announcement_email(job_id: int, payload: EmailDraftRequest, db: 
     company = db.query(Company).filter(Company.id == job.company_id).first()
     company_name = company.name if company else "Corporate Recruiter"
 
-    # Count eligible students
     eligible_students = db.query(StudentProfile).filter(
         StudentProfile.cgpa >= job.min_cgpa,
         StudentProfile.active_backlogs <= job.max_backlogs,
@@ -440,7 +457,12 @@ Output JSON with keys:
     }
 
 @router.post("/drives/{job_id}/send-email")
-def dispatch_drive_announcement_email(job_id: int, payload: EmailSendRequest, db: Session = Depends(get_db)):
+def dispatch_drive_announcement_email(
+    job_id: int, 
+    payload: EmailSendRequest, 
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_admin_role)
+):
     """
     Simulates sending the official email broadcast to all eligible students and records dispatch logs.
     """
@@ -463,5 +485,5 @@ def dispatch_drive_announcement_email(job_id: int, payload: EmailSendRequest, db
         "job_title": job.title,
         "recipients_count": eligible_count,
         "subject": payload.subject,
-        "dispatched_at": datetime.now().isoformat()
+        "dispatched_at": datetime.now(timezone.utc).isoformat()
     }

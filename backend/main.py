@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from app.database.session import engine, Base
+from app.database.session import engine, Base, check_database_health
 from app.api import auth_routes, student_routes, recruiter_routes, admin_routes, copilot_routes, ingestion_routes
 from app.core.config import FRONTEND_URL
 from seed_data import seed_database
@@ -62,7 +62,21 @@ app.include_router(ingestion_routes.router)
 
 @app.get("/health")
 def liveness_check():
-    return {"status": "healthy"}
+    db_health = check_database_health()
+    if not db_health.get("connected"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unhealthy",
+                "service": "VFSTR AutoPlace AI Backend",
+                "database": db_health
+            }
+        )
+    return {
+        "status": "healthy",
+        "service": "VFSTR AutoPlace AI Backend",
+        "database": db_health
+    }
 
 # =========================================================================
 # UNIFIED FULL-STACK DEPLOYMENT (Single URL & Single Service)

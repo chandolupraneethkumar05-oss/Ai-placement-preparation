@@ -8,6 +8,7 @@ from app.database.session import get_db
 from app.models.all_models import StudentProfile, JobPosting, Company, Application
 from app.ai_engine.gemini_service import call_gemini_api
 from app.ai_engine.resume_extractor import calculate_ats_score
+from app.core.security import get_current_user_payload
 
 router = APIRouter(prefix="/copilot", tags=["AI Copilot"])
 
@@ -48,25 +49,24 @@ Key Institutional Features of VFSTR AutoPlace AI:
    - If the MOU has expired, the Dean has two options: 'Renew MOU & Approve Drive' (1, 2, or 3-year extension) or 'Reject/Discontinue Drive'.
    - Once approved, the drive is instantly broadcast to students via Server-Sent Events (SSE) without needing a page refresh.
 
-2. Placement Drive Stage Attendance:
-   - Tracks student physical attendance at genuine recruitment milestones using admit cards/QR scan tokens:
-     * Stage 1: Pre-Placement Talk (PPT)
-     * Stage 2: Online Assessment / Coding Test
-     * Stage 3: Technical Interview Panel
-     * Stage 4: HR Interview & Offer Issuance
-   - Classroom lecture attendance is explicitly excluded to focus on real placement outcomes.
+2. Transparent Academic Eligibility Engine:
+   - Evaluates hard cutoffs: Minimum CGPA, Maximum Active Backlogs, Eligible Branches, and Academic Year (with degree duration awareness: B.Tech 4 yrs, M.Tech 2 yrs).
+   - Provides itemized diagnostics explaining why a student is eligible or ineligible with shortfall calculations.
 
 3. Collision-Free Physical Chamber Scheduling:
-   - Allocates campus venues (A-Block, Chamber A-204, Panel 1) with collision detection to prevent student or panel overlapping.
-   - Recruiters can use '⚡ Smart Auto-Schedule All' to distribute all shortlisted candidates across panels automatically.
+   - Allocates candidates across real campus venues (A-Block Placement Hub, H-Block, Library, Digital Seminar Halls).
+   - Automatic spatial and time collision detection ensures no candidate or panel room is double-booked.
+   - Corporate recruiters can auto-schedule all shortlisted candidates with 1 click.
 
-4. Transparent Eligibility Diagnostics:
-   - Shows students exactly why they are ineligible for a drive: CGPA shortfall gap, active backlogs excess, branch restriction, or academic year restriction.
+4. Candidate QR Code Admit Card / Hall Ticket:
+   - Issued to students shortlisted for confirmed interview rounds.
+   - Includes real block, chamber room, reporting time, Dean's digital signature, and tamper-proof verification hash.
 
-5. Candidate Academic Dossier:
-   - Provides recruiters with a full semester-by-semester SGPA progression (Sem 1 to current), active vs cleared backlogs, honors, and verified skills.
+5. Dynamic Question Generation & RAG Previous Year Questions (PYQs):
+   - Tailored technical, reasoning, and behavioral questions for Amazon, TCS, Infosys, Cognizant, etc.
+   - Evaluates submitted answers with conceptual rubric scores and targeted constructive feedback.
 
-6. Talent Shine Resume Builder & ATS Scoring:
+6. Authentic Talent Shine ATS Resume Scoring:
    - Authentic ATS score calculated dynamically based on target role keywords, metrics, STAR action verbs, and contact completeness (0-100). Never hardcoded.
 
 Companies Active on Campus:
@@ -77,7 +77,11 @@ Companies Active on Campus:
 """
 
 @router.post("/chat")
-def copilot_chat(payload: CopilotChatRequest, db: Session = Depends(get_db)):
+def copilot_chat(
+    payload: CopilotChatRequest, 
+    db: Session = Depends(get_db),
+    auth_payload: Optional[dict] = Depends(get_current_user_payload)
+):
     """
     Intelligent multi-turn AI assistant capable of explaining system workflows,
     checking company eligibility, advising on interview rounds, and guiding resume improvement.
@@ -86,15 +90,26 @@ def copilot_chat(payload: CopilotChatRequest, db: Session = Depends(get_db)):
     if not user_query:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
+    # IDOR Protection: If caller is authenticated as a student, prevent querying other students' data
+    if auth_payload and auth_payload.get("role") == "student" and payload.student_id:
+        caller_user_id = int(auth_payload.get("sub", 0))
+        own_profile = db.query(StudentProfile).filter(StudentProfile.user_id == caller_user_id).first()
+        if own_profile and own_profile.id != payload.student_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Security Violation: You are not authorized to query private records of another student."
+            )
+
     salutation = get_respectful_salutation(payload.user_name or "User", payload.user_role or "student")
 
     student_context = ""
     if payload.student_id:
-        student = db.query(Student).filter(Student.id == payload.student_id).first()
+        student = db.query(StudentProfile).filter(StudentProfile.id == payload.student_id).first()
         if student:
+            s_name = student.user.full_name if student.user else student.reg_no
             student_context = f"""
 Current Student Profile Context:
-- Name: {student.name} ({student.reg_no})
+- Name: {s_name} ({student.reg_no})
 - Branch: {student.branch}, Degree: {student.degree}
 - Current CGPA: {student.cgpa}, Active Backlogs: {student.active_backlogs}
 - Target Role: {student.target_role or 'Unset'}
@@ -121,10 +136,14 @@ Instructions:
 """
 
     # Call Gemini API
-    ai_reply = call_gemini_api(prompt, system_instruction="You are the official VFSTR AutoPlace AI Campus Intelligence Copilot. Always address the user respectfully.")
+    gemini_reply = call_gemini_api(prompt, system_instruction="You are the official VFSTR AutoPlace AI Campus Intelligence Copilot. Always address the user respectfully.")
     
-    # High-quality fallback if Gemini API key is unavailable or network offline
-    if not ai_reply:
+    if gemini_reply and len(gemini_reply.strip()) > 10:
+        ai_reply = gemini_reply.strip()
+        response_source = "gemini"
+    else:
+        # High-quality deterministic fallback if Gemini is offline or rate-limited
+        response_source = "knowledge_base"
         q_lower = user_query.lower()
         if "mou" in q_lower or "dean" in q_lower or "approval" in q_lower:
             ai_reply = (
@@ -192,16 +211,30 @@ Instructions:
 
     return {
         "reply": ai_reply,
-        "source": "gemini" if "call_gemini_api" else "knowledge_base"
+        "source": response_source
     }
 
 @router.post("/optimize-resume")
-def optimize_resume(payload: OptimizeResumeRequest, db: Session = Depends(get_db)):
+def optimize_resume(
+    payload: OptimizeResumeRequest, 
+    db: Session = Depends(get_db),
+    auth_payload: Optional[dict] = Depends(get_current_user_payload)
+):
     """
     Analyzes student resume text against their target role and company,
     generates optimized STAR-format bullet points, extracts missing technical keywords,
     and returns text that can be applied directly to the student's resume.
     """
+    # IDOR Protection
+    if auth_payload and auth_payload.get("role") == "student":
+        caller_user_id = int(auth_payload.get("sub", 0))
+        own_profile = db.query(StudentProfile).filter(StudentProfile.user_id == caller_user_id).first()
+        if own_profile and own_profile.id != payload.student_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Security Violation: You are not authorized to optimize the resume of another student."
+            )
+
     student = db.query(StudentProfile).filter(StudentProfile.id == payload.student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student profile not found")
@@ -250,7 +283,6 @@ Output strictly valid JSON with this format:
     parsed = None
     if gemini_resp:
         try:
-            # Clean markdown formatting if present
             clean_str = gemini_resp.strip()
             if "```json" in clean_str:
                 clean_str = clean_str.split("```json")[1].split("```")[0].strip()
