@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from app.database.session import get_db
-from app.models.all_models import StudentProfile, JobPosting, Application, Notification
+from app.models.all_models import StudentProfile, JobPosting, Application, Notification, DriveAttendance
 from app.ai_engine.year_calculator import parse_vfstr_reg_no
 from app.ai_engine.eligibility import check_student_eligibility
 from app.ai_engine.matcher import calculate_match_score
@@ -362,6 +362,8 @@ def get_jobs_for_student(student_id: int, db: Session = Depends(get_db)):
             "job_id": job.id,
             "title": job.title,
             "company": job.company.name if job.company else "Campus Drive",
+            "company_mou_ref": getattr(job.company, "mou_reference_no", "") if job.company else "",
+            "company_mou_status": getattr(job.company, "mou_status", "ACTIVE") if job.company else "ACTIVE",
             "ctc_lpa": job.ctc_lpa,
             "job_type": job.job_type,
             "min_cgpa": job.min_cgpa,
@@ -370,6 +372,7 @@ def get_jobs_for_student(student_id: int, db: Session = Depends(get_db)):
             "deadline": job.deadline,
             "is_eligible": eligibility["is_eligible"],
             "eligibility_reasons": eligibility["reasons"],
+            "eligibility_diagnostics": eligibility.get("diagnostics", {}),
             "match_score": match["match_score"],
             "matched_skills": match["matched_skills"],
             "missing_skills": match["missing_skills"],
@@ -382,6 +385,36 @@ def get_jobs_for_student(student_id: int, db: Session = Depends(get_db)):
     # Sort: Target role matches & eligible first, then by match score
     results.sort(key=lambda x: (x["target_role_match"], x["is_eligible"], x["match_score"]), reverse=True)
     return results
+
+@router.get("/attendance/{student_id}")
+def get_student_placement_attendance(student_id: int, db: Session = Depends(get_db)):
+    """Fetches verified campus placement drive stage attendance records."""
+    profile = db.query(StudentProfile).filter(StudentProfile.id == student_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    records = db.query(DriveAttendance).filter(DriveAttendance.student_id == student_id).order_by(DriveAttendance.check_in_time.desc()).all()
+    results = []
+    for r in records:
+        results.append({
+            "id": r.id,
+            "job_id": r.job_id,
+            "job_title": r.job.title if r.job else "Campus Drive",
+            "company_name": r.job.company.name if r.job and r.job.company else "Company",
+            "event_type": r.event_type,
+            "status": r.status,
+            "check_in_time": r.check_in_time.isoformat() if r.check_in_time else "",
+            "verified_by": r.verified_by,
+            "scan_hash": r.hall_ticket_scan_hash
+        })
+
+    return {
+        "student_id": profile.id,
+        "reg_no": profile.reg_no,
+        "name": profile.user.full_name if profile.user else "",
+        "total_attended_events": len([r for r in records if r.status == "PRESENT"]),
+        "records": results
+    }
 
 @router.post("/apply/{student_id}/{job_id}")
 def apply_job(student_id: int, job_id: int, db: Session = Depends(get_db), auth: dict = Depends(get_current_user_payload)):
@@ -473,7 +506,7 @@ def get_shortlisted_interviews(student_id: int, db: Session = Depends(get_db)):
         if "shortlisted" in app.status.lower() or "confirmed" in app.status.lower():
             comp_name = app.job.company.name if app.job and app.job.company else "Company"
             rounds = get_company_rounds(comp_name)
-            slot = app.interview_schedule
+            slot = app.interview_slot
             results.append({
                 "application_id": app.id,
                 "job_id": app.job.id,
@@ -564,7 +597,7 @@ def get_hall_ticket(student_id: int, application_id: int, db: Session = Depends(
     if not ("shortlisted" in app.status.lower() or "confirmed" in app.status.lower()):
         raise HTTPException(status_code=403, detail="Hall ticket is only issued for shortlisted / confirmed interviews.")
 
-    slot = app.interview_schedule
+    slot = app.interview_slot
     comp_name = app.job.company.name if app.job and app.job.company else "Recruiting Partner"
     verification_hash = f"VFSTR-{profile.reg_no}-{app.id}-{slot.id if slot else '0'}-2026"
     

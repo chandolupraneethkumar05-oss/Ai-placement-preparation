@@ -6,7 +6,7 @@ rawBase = rawBase.replace(/\/+$/, "");
 
 // In unified full-stack mode, frontend is served directly by backend -> use relative "" (same domain, no CORS, no failed to fetch)
 // In local dev mode with Vite server on port 5173 / 3000, fallback to local backend on port 8000
-const API_BASE = rawBase || (typeof window !== "undefined" && (window.location.port === "5173" || window.location.port === "3000") ? "http://127.0.0.1:8000" : "");
+export const API_BASE = rawBase || (typeof window !== "undefined" && (window.location.port === "5173" || window.location.port === "3000") ? "http://127.0.0.1:8000" : "");
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("autoplace_token");
@@ -338,4 +338,193 @@ export async function toggleCompanyVerification(companyId: number) {
     headers: getAuthHeaders()
   });
   return res.json();
+}
+
+// -------------------------------------------------------------
+// Enterprise Features & Governance Endpoints
+// -------------------------------------------------------------
+
+export async function fetchCurrentUser() {
+  const res = await fetch(`${API_BASE}/auth/me`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to restore session");
+  }
+  return res.json();
+}
+
+export async function fetchNotifications() {
+  const res = await fetch(`${API_BASE}/auth/notifications`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) return { notifications: [], total: 0, unread: 0 };
+  return res.json();
+}
+
+export async function dismissAllNotifications() {
+  const res = await fetch(`${API_BASE}/auth/notifications/dismiss-all`, {
+    method: "POST",
+    headers: getAuthHeaders()
+  });
+  return res.json();
+}
+
+export async function clearAllNotifications() {
+  const res = await fetch(`${API_BASE}/auth/notifications/clear`, {
+    method: "DELETE",
+    headers: getAuthHeaders()
+  });
+  return res.json();
+}
+
+export async function fetchStudentAttendance(studentId: number) {
+  const res = await fetch(`${API_BASE}/student/attendance/${studentId}`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to load placement attendance");
+  }
+  return res.json();
+}
+
+export async function fetchStudentDossier(studentId: number) {
+  const res = await fetch(`${API_BASE}/recruiter/student-dossier/${studentId}`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to load candidate dossier");
+  }
+  return res.json();
+}
+
+export async function autoScheduleBatch(payload: {
+  job_id: number;
+  slot_duration_minutes?: number;
+  interview_date?: string;
+  default_venue?: string;
+}) {
+  const res = await fetch(`${API_BASE}/recruiter/auto-schedule-batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Auto-scheduling failed");
+  }
+  return res.json();
+}
+
+export async function downloadApplicantsCsv(jobId: number, filename = "applicants.csv") {
+  const res = await fetch(`${API_BASE}/recruiter/export-applicants/${jobId}`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) throw new Error("Failed to export applicants");
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function fetchPendingDrives() {
+  const res = await fetch(`${API_BASE}/admin/pending-drives`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) return { pending_drives: [], total: 0 };
+  return res.json();
+}
+
+export async function approveDrive(jobId: number, deanRemarks?: string) {
+  const res = await fetch(`${API_BASE}/admin/approve-drive/${jobId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ dean_remarks: deanRemarks || "Approved by Dean of Placements." })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to approve drive");
+  }
+  return res.json();
+}
+
+export async function renewMOUAndApprove(jobId: number, durationYears: number, deanRemarks?: string) {
+  const res = await fetch(`${API_BASE}/admin/renew-mou-and-approve/${jobId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({
+      duration_years: durationYears,
+      dean_remarks: deanRemarks || `Renewed MOU for ${durationYears} year(s) and approved drive.`
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to renew MOU and approve drive");
+  }
+  return res.json();
+}
+
+export async function rejectDrive(jobId: number, reason: string) {
+  const res = await fetch(`${API_BASE}/admin/reject-drive/${jobId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ reason })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to reject drive");
+  }
+  return res.json();
+}
+
+export async function fetchMOURegistry() {
+  const res = await fetch(`${API_BASE}/admin/mou-registry`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) return { registry: [], total: 0 };
+  return res.json();
+}
+
+export async function registerMOU(payload: {
+  company_id: number;
+  mou_reference_code: string;
+  signed_date: string;
+  expiry_date: string;
+  category?: string;
+  functional_activities?: string;
+}) {
+  const res = await fetch(`${API_BASE}/admin/register-mou`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to register MOU");
+  }
+  return res.json();
+}
+
+export async function downloadPlacementsCsv(filename = "placements_export.csv") {
+  const res = await fetch(`${API_BASE}/admin/export-placements-csv`, {
+    headers: getAuthHeaders()
+  });
+  if (!res.ok) throw new Error("Failed to export placements data");
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
 }

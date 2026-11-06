@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Float, Boolean, Text, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Float, Boolean, Text, ForeignKey, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.database.session import Base
 
@@ -42,11 +42,17 @@ class StudentProfile(Base):
     selected_template = Column(String(50), default="gengar")
     accent_color = Column(String(30), default="#d32f2f")
     placement_status = Column(String(30), default="UNPLACED") # 'UNPLACED', 'TIER_1', 'TIER_2'
+    honors_json = Column(Text, default='["Dean\'s Merit Scholar"]')
+    certifications_json = Column(Text, default='["AWS Certified Cloud Practitioner", "Oracle Certified Java Associate"]')
+    publications_json = Column(Text, default='[]')
+    is_profile_frozen = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="student_profile")
-    applications = relationship("Application", back_populates="student")
-    interview_slots = relationship("InterviewSchedule", back_populates="student")
+    applications = relationship("Application", back_populates="student", cascade="all, delete-orphan")
+    interview_slots = relationship("InterviewSchedule", back_populates="student", cascade="all, delete-orphan")
+    semester_records = relationship("AcademicSemesterRecord", back_populates="student", cascade="all, delete-orphan", order_by="AcademicSemesterRecord.semester_num")
+    attendances = relationship("DriveAttendance", back_populates="student", cascade="all, delete-orphan")
 
     @property
     def skills(self):
@@ -59,6 +65,37 @@ class StudentProfile(Base):
     def skills(self, val):
         self.skills_json = json.dumps(val)
 
+    @property
+    def honors(self):
+        try:
+            return json.loads(self.honors_json) if self.honors_json else []
+        except:
+            return []
+
+    @property
+    def certifications(self):
+        try:
+            return json.loads(self.certifications_json) if self.certifications_json else []
+        except:
+            return []
+
+class AcademicSemesterRecord(Base):
+    __tablename__ = "academic_semester_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    student_id = Column(Integer, ForeignKey("student_profiles.id", ondelete="CASCADE"), nullable=False)
+    semester_num = Column(Integer, nullable=False) # 1 to 8
+    sgpa = Column(Float, nullable=False)
+    cgpa_at_sem = Column(Float, nullable=False)
+    credits_earned = Column(Integer, default=22)
+    backlogs_in_sem = Column(Integer, default=0)
+    backlog_subjects_json = Column(Text, default="[]") # e.g. ["22CS301 Compiler Design"]
+    is_cleared = Column(Boolean, default=True)
+    cleared_date = Column(String(60), nullable=True) # e.g. 'Nov 2024 (Supplementary Exam)'
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    student = relationship("StudentProfile", back_populates="semester_records")
+
 class Company(Base):
     __tablename__ = "companies"
 
@@ -69,6 +106,15 @@ class Company(Base):
     description = Column(Text, nullable=True)
     is_verified = Column(Boolean, default=True)
     registration_id = Column(String(80), nullable=True)
+    
+    # Institutional Memorandum of Understanding (MOU) Fields
+    mou_reference_no = Column(String(80), nullable=True, default="VFSTR-MOU-GEN-2024")
+    mou_valid_from = Column(String(30), nullable=True, default="2024-06-01")
+    mou_valid_till = Column(String(30), nullable=True, default="2027-05-31")
+    mou_category = Column(String(100), default="Tier-1 Campus Recruitment & Internship")
+    mou_status = Column(String(30), default="ACTIVE") # 'ACTIVE', 'EXPIRED', 'PENDING_RENEWAL'
+    mou_notes = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     recruiters = relationship("RecruiterProfile", back_populates="company")
@@ -110,13 +156,19 @@ class JobPosting(Base):
     eligible_years_json = Column(Text, default="[4]") # Recruiter-selected
     target_role_category = Column(String(80), default="Software Development Engineer (SDE)")
     deadline = Column(String(40), default="2026-12-31")
-    status = Column(String(20), default="ACTIVE")
+    
+    # Dean & Institutional Gatekeeping Status
+    status = Column(String(40), default="PENDING_DEAN_APPROVAL") # 'PENDING_DEAN_APPROVAL', 'ACTIVE', 'REJECTED', 'CLOSED'
+    dean_remarks = Column(Text, nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     company = relationship("Company", back_populates="jobs")
     recruiter = relationship("RecruiterProfile", back_populates="posted_jobs")
-    applications = relationship("Application", back_populates="job")
-    interview_slots = relationship("InterviewSchedule", back_populates="job")
+    applications = relationship("Application", back_populates="job", cascade="all, delete-orphan")
+    interview_slots = relationship("InterviewSchedule", back_populates="job", cascade="all, delete-orphan")
+    attendances = relationship("DriveAttendance", back_populates="job", cascade="all, delete-orphan")
 
     @property
     def eligible_branches(self):
@@ -141,6 +193,9 @@ class JobPosting(Base):
 
 class Application(Base):
     __tablename__ = "applications"
+    __table_args__ = (
+        UniqueConstraint("student_id", "job_id", name="uq_student_job_application"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("student_profiles.id", ondelete="CASCADE"), nullable=False)
@@ -154,13 +209,13 @@ class Application(Base):
 
     student = relationship("StudentProfile", back_populates="applications")
     job = relationship("JobPosting", back_populates="applications")
-    interview_slot = relationship("InterviewSchedule", back_populates="application", uselist=False)
+    interview_slot = relationship("InterviewSchedule", back_populates="application", uselist=False, cascade="all, delete-orphan")
 
 class InterviewSchedule(Base):
     __tablename__ = "interview_schedules"
 
     id = Column(Integer, primary_key=True, index=True)
-    application_id = Column(Integer, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False)
+    application_id = Column(Integer, ForeignKey("applications.id", ondelete="CASCADE"), unique=True, nullable=False)
     job_id = Column(Integer, ForeignKey("job_postings.id", ondelete="CASCADE"), nullable=False)
     student_id = Column(Integer, ForeignKey("student_profiles.id", ondelete="CASCADE"), nullable=False)
     block_name = Column(String(50), nullable=False) # e.g. 'A Block', 'H Block', 'NTR Library'
@@ -174,6 +229,24 @@ class InterviewSchedule(Base):
     application = relationship("Application", back_populates="interview_slot")
     job = relationship("JobPosting", back_populates="interview_slots")
     student = relationship("StudentProfile", back_populates="interview_slots")
+
+class DriveAttendance(Base):
+    __tablename__ = "drive_attendances"
+    __table_args__ = (
+        UniqueConstraint("job_id", "student_id", "event_type", name="uq_job_student_event_attendance"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey("job_postings.id", ondelete="CASCADE"), nullable=False)
+    student_id = Column(Integer, ForeignKey("student_profiles.id", ondelete="CASCADE"), nullable=False)
+    event_type = Column(String(50), nullable=False) # 'PPT', 'ONLINE_TEST', 'TECHNICAL_INTERVIEW', 'HR_INTERVIEW'
+    status = Column(String(30), default="PRESENT") # 'PRESENT', 'ABSENT'
+    check_in_time = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    verified_by = Column(String(80), default="T&P Verification Desk")
+    hall_ticket_scan_hash = Column(String(120), nullable=True)
+
+    student = relationship("StudentProfile", back_populates="attendances")
+    job = relationship("JobPosting", back_populates="attendances")
 
 class Notification(Base):
     __tablename__ = "notifications"

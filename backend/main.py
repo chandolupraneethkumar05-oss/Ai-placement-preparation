@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -91,16 +91,17 @@ if FRONTEND_DIST:
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Exclude FastAPI docs
-        if full_path in ["docs", "redoc", "openapi.json"]:
-            return None
+        # Allow native FastAPI routes and documentation
+        clean_p = full_path.strip().lower()
+        if clean_p.startswith(("docs", "redoc", "openapi.json", "auth", "student", "recruiter", "admin", "health")):
+            raise HTTPException(status_code=404, detail="API route not found")
         file_path = os.path.join(FRONTEND_DIST, full_path)
         if full_path and os.path.isfile(file_path):
             return FileResponse(file_path)
         index_file = os.path.join(FRONTEND_DIST, "index.html")
         if os.path.isfile(index_file):
             return FileResponse(index_file)
-        return {"error": "Frontend build not found"}
+        raise HTTPException(status_code=404, detail="File not found")
 else:
     @app.get("/")
     def health_check():

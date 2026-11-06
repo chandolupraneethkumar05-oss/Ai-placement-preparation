@@ -1,13 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import type { UserSession, DemoPersona } from './types';
-import { fetchDemoPersonas } from './api';
+import type { UserSession, DemoPersona, NotificationItem } from './types';
+import { 
+  fetchDemoPersonas, 
+  fetchCurrentUser, 
+  fetchNotifications, 
+  dismissAllNotifications, 
+  clearAllNotifications 
+} from './api';
 import { Sidebar } from './components/Sidebar';
 import { AuthModal } from './pages/AuthModal';
 import { StudentDashboard } from './pages/StudentDashboard';
 import { RecruiterDashboard } from './pages/RecruiterDashboard';
 import { AdminDashboard } from './pages/AdminDashboard';
 import { LandingPage } from './pages/LandingPage';
-import { Sparkles, Bell, Shield, LogIn, Menu, X, CheckCircle2 } from 'lucide-react';
+import { Bell, LogIn, Menu, X, CheckCircle2 } from 'lucide-react';
 
 export function App() {
   const [session, setSession] = useState<UserSession | null>(null);
@@ -15,19 +21,68 @@ export function App() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [authDefaultRole, setAuthDefaultRole] = useState<'student' | 'recruiter' | 'admin'>('student');
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Student Navigation state controlled from Sidebar
-  const [activeStudentTab, setActiveStudentTab] = useState<'jobs' | 'applications' | 'resume'>('jobs');
+  const [activeStudentTab, setActiveStudentTab] = useState<'jobs' | 'applications' | 'resume' | 'attendance'>('jobs');
   const [triggerPracticeAssessment, setTriggerPracticeAssessment] = useState(false);
 
+  // Initial load: fetch demo personas and attempt session rehydration from localStorage
   useEffect(() => {
     fetchDemoPersonas().then(data => {
       setPersonas(data);
     }).catch(console.error);
+
+    const savedToken = localStorage.getItem("autoplace_token");
+    if (savedToken) {
+      fetchCurrentUser()
+        .then(user => {
+          setSession({
+            token: savedToken,
+            role: user.role,
+            full_name: user.full_name,
+            user_id: user.user_id,
+            profile_id: user.profile_id,
+            reg_no: user.reg_no,
+            email: user.email,
+            degree: user.degree,
+            branch: user.branch,
+            year: user.year,
+            batch: user.batch,
+            company_name: user.company_name
+          });
+        })
+        .catch(() => {
+          localStorage.removeItem("autoplace_token");
+        });
+    }
   }, []);
 
+  const loadNotifications = async () => {
+    try {
+      const data = await fetchNotifications();
+      if (data && data.notifications) {
+        setNotifications(data.notifications);
+        setUnreadCount(data.unread || 0);
+      }
+    } catch (e) {
+      console.error("Failed to load notifications:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (session) {
+      loadNotifications();
+    } else {
+      setNotifications([]);
+      setUnreadCount(0);
+    }
+  }, [session]);
+
   const handleSelectPersona = (p: DemoPersona) => {
+    localStorage.setItem("autoplace_token", p.token);
     setSession({
       token: p.token,
       role: p.role,
@@ -37,6 +92,11 @@ export function App() {
       reg_no: p.reg_no,
       email: p.email
     });
+  };
+
+  const handleLoginSuccess = (s: UserSession) => {
+    localStorage.setItem("autoplace_token", s.token);
+    setSession(s);
   };
 
   const handleLogout = () => {
@@ -59,7 +119,7 @@ export function App() {
               onLogout={handleLogout}
               activeNav={activeStudentTab}
               onNavigate={navId => {
-                if (navId === 'jobs' || navId === 'applications' || navId === 'resume') {
+                if (navId === 'jobs' || navId === 'applications' || navId === 'resume' || navId === 'attendance') {
                   setActiveStudentTab(navId);
                 }
               }}
@@ -87,7 +147,7 @@ export function App() {
                   onLogout={handleLogout}
                   activeNav={activeStudentTab}
                   onNavigate={navId => {
-                    if (navId === 'jobs' || navId === 'applications' || navId === 'resume') {
+                    if (navId === 'jobs' || navId === 'applications' || navId === 'resume' || navId === 'attendance') {
                       setActiveStudentTab(navId);
                     }
                     setMobileSidebarOpen(false);
@@ -107,7 +167,7 @@ export function App() {
       {/* 2. MAIN SCROLLABLE CONTENT AREA (Offset by Fixed Sidebar) */}
       <div className={`flex-1 flex flex-col min-h-screen ${session ? 'lg:pl-64' : ''}`}>
         
-        {/* Streamlined Clean Top Header (Search Bar Removed As Requested) */}
+        {/* Streamlined Clean Top Header */}
         <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm px-4 sm:px-8 py-3.5 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             {session && (
@@ -147,12 +207,19 @@ export function App() {
                 </div>
 
                 <button
-                  onClick={() => setIsNotifOpen(true)}
+                  onClick={() => {
+                    setIsNotifOpen(true);
+                    loadNotifications();
+                  }}
                   className="relative p-2 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-xl transition"
                   title="Notifications"
                 >
                   <Bell size={18} />
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-blue-600 rounded-full" />
+                  {unreadCount > 0 && (
+                    <span className="absolute top-1 right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[10px] font-black rounded-full shadow">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
                 </button>
               </>
             ) : (
@@ -207,32 +274,82 @@ export function App() {
         isOpen={isAuthOpen}
         defaultRole={authDefaultRole}
         onClose={() => setIsAuthOpen(false)}
-        onLoginSuccess={s => setSession(s)}
+        onLoginSuccess={handleLoginSuccess}
       />
 
-      {/* Notification Drawer */}
+      {/* Dynamic Notification Drawer */}
       {isNotifOpen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex justify-end">
           <div className="bg-white w-full max-w-sm h-full p-6 shadow-2xl flex flex-col justify-between">
-            <div>
+            <div className="flex-1 overflow-y-auto">
               <div className="flex justify-between items-center pb-4 border-b border-slate-100">
-                <h3 className="font-bold text-sm text-slate-900">Placement Notifications</h3>
-                <button onClick={() => setIsNotifOpen(false)} className="text-slate-400 text-xs">Close</button>
-              </div>
-              <div className="mt-4 space-y-2 text-xs">
-                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-1">
-                  <div className="font-bold text-blue-900">🎯 New Campus Drive: Amazon</div>
-                  <p className="text-slate-600">Amazon posted SDE-1 opening. Your profile meets the criteria!</p>
+                <div className="flex items-center space-x-2">
+                  <h3 className="font-bold text-sm text-slate-900">Placement Notifications</h3>
+                  {unreadCount > 0 && (
+                    <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      {unreadCount} unread
+                    </span>
+                  )}
                 </div>
-                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl space-y-1">
-                  <div className="font-bold text-emerald-900">🎟️ Digital Interview Pass Ready</div>
-                  <p className="text-slate-600">Your slot is confirmed for Chamber A-204 at 10:30 AM.</p>
-                </div>
+                <button onClick={() => setIsNotifOpen(false)} className="text-slate-400 hover:text-slate-600 text-xs font-bold">
+                  Close
+                </button>
               </div>
+
+              {notifications.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 text-xs">
+                  <Bell size={28} className="mx-auto mb-2 opacity-30 text-slate-400" />
+                  <p className="font-medium">No notifications yet.</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Updates regarding drives & interviews will appear here.</p>
+                </div>
+              ) : (
+                <div className="mt-4 space-y-2 text-xs">
+                  {notifications.map((n) => (
+                    <div
+                      key={n.id}
+                      className={`p-3 rounded-xl border space-y-1 transition ${
+                        n.is_read
+                          ? 'bg-slate-50 border-slate-200 text-slate-600'
+                          : 'bg-blue-50/70 border-blue-200 text-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-900">{n.title}</span>
+                        {!n.is_read && <span className="w-2 h-2 rounded-full bg-blue-600" title="Unread"></span>}
+                      </div>
+                      <p className="text-slate-600 text-[11px] leading-relaxed">{n.message}</p>
+                      <div className="text-[10px] text-slate-400">
+                        {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {new Date(n.created_at).toLocaleDateString()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <button onClick={() => setIsNotifOpen(false)} className="w-full bg-slate-900 text-white font-bold py-2 rounded-xl text-xs">
-              Dismiss All
-            </button>
+
+            <div className="pt-4 border-t border-slate-100 space-y-2">
+              <button
+                onClick={async () => {
+                  await dismissAllNotifications();
+                  await loadNotifications();
+                }}
+                disabled={notifications.length === 0 || unreadCount === 0}
+                className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white font-bold py-2 rounded-xl text-xs transition shadow-sm"
+              >
+                Mark All as Read
+              </button>
+              <button
+                onClick={async () => {
+                  await clearAllNotifications();
+                  setNotifications([]);
+                  setUnreadCount(0);
+                }}
+                disabled={notifications.length === 0}
+                className="w-full bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-600 font-bold py-1.5 rounded-xl text-xs transition"
+              >
+                Clear All Notifications
+              </button>
+            </div>
           </div>
         </div>
       )}

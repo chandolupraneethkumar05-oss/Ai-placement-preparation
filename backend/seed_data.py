@@ -1,7 +1,11 @@
 import json
 import os
+from datetime import datetime, timezone
 from app.database.session import SessionLocal, Base, engine
-from app.models.all_models import User, StudentProfile, Company, RecruiterProfile, JobPosting, Application, InterviewSchedule, Notification
+from app.models.all_models import (
+    User, StudentProfile, Company, RecruiterProfile, JobPosting, 
+    Application, InterviewSchedule, Notification, AcademicSemesterRecord, DriveAttendance
+)
 from app.core.security import get_password_hash
 from app.ai_engine.resume_extractor import calculate_ats_score
 
@@ -9,14 +13,9 @@ def seed_database(force_recreate: bool = False):
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
 
-    # STRICT PERSISTENCE: If database already contains accounts and not forcing recreate, preserve user accounts!
     existing_users_count = db.query(User).count()
     if existing_users_count > 0 and not force_recreate:
-        print(f"VFSTR Placement Database already initialized with {existing_users_count} users. Preserving registered accounts.")
-        cognizant = db.query(Company).filter(Company.name == "Cognizant").first()
-        if cognizant and cognizant.is_verified:
-            cognizant.is_verified = False
-            db.commit()
+        print(f"VFSTR Placement Database already initialized with {existing_users_count} users.")
         db.close()
         return
 
@@ -24,7 +23,7 @@ def seed_database(force_recreate: bool = False):
         Base.metadata.drop_all(bind=engine)
         Base.metadata.create_all(bind=engine)
 
-    print("Seeding VFSTR Placement Database with genuine non-hardcoded schemas and Talent Shine builder support...")
+    print("Seeding VFSTR Placement Database with institutional MOUs, Academic Semesters, and Smart Scheduling...")
     default_pw = get_password_hash("vignan123")
 
     # 1. College Administration (Dean / HOD)
@@ -38,24 +37,96 @@ def seed_database(force_recreate: bool = False):
     db.add(admin)
     db.commit()
 
-    # 2. Companies & Recruiters (3 Verified Industry Partners, 1 Pending Accreditation Review)
+    # 2. Companies & Recruiters with Authentic Institutional MOUs
     companies_data = [
-        {"name": "Amazon", "domain": "amazon.com", "website": "https://amazon.jobs", "recruiter_name": "Vikram Seth", "email": "recruiter@amazon.com", "designation": "Campus Lead", "employee_id": "AMZ-HR-7891", "is_verified": True},
-        {"name": "TCS", "domain": "tcs.com", "website": "https://tcs.com/careers", "recruiter_name": "Ananya Roy", "email": "careers@tcs.com", "designation": "Talent Partner", "employee_id": "TCS-TA-4021", "is_verified": True},
-        {"name": "Infosys", "domain": "infosys.com", "website": "https://infosys.com", "recruiter_name": "Deepak Verma", "email": "campus@infosys.com", "designation": "HR Specialist", "employee_id": "INF-HR-9012", "is_verified": True},
-        {"name": "Cognizant", "domain": "cognizant.com", "website": "https://cognizant.com", "recruiter_name": "Rohan Mehra", "email": "campus@cognizant.com", "designation": "University Lead", "employee_id": "CTS-UR-3108", "is_verified": False}
+        {
+            "name": "Amazon",
+            "domain": "amazon.com",
+            "website": "https://amazon.jobs",
+            "recruiter_name": "Vikram Seth",
+            "email": "recruiter@amazon.com",
+            "designation": "HR Campus Lead",
+            "employee_id": "AMZ-HR-7891",
+            "is_verified": True,
+            "mou_reference_no": "VFSTR-MOU-AMZ-2024",
+            "mou_valid_from": "2024-06-01",
+            "mou_valid_till": "2027-05-31",
+            "mou_category": "Tier-1 Strategic Hiring & AWS Cloud Lab",
+            "mou_status": "ACTIVE"
+        },
+        {
+            "name": "TCS",
+            "domain": "tcs.com",
+            "website": "https://tcs.com/careers",
+            "recruiter_name": "Ananya Roy",
+            "email": "careers@tcs.com",
+            "designation": "Talent Partner",
+            "employee_id": "TCS-TA-4021",
+            "is_verified": True,
+            "mou_reference_no": "VFSTR-MOU-TCS-2023",
+            "mou_valid_from": "2023-08-01",
+            "mou_valid_till": "2026-07-31",
+            "mou_category": "Digital Hiring & Faculty Training",
+            "mou_status": "ACTIVE"
+        },
+        {
+            "name": "Infosys",
+            "domain": "infosys.com",
+            "website": "https://infosys.com",
+            "recruiter_name": "Deepak Verma",
+            "email": "campus@infosys.com",
+            "designation": "HR Specialist",
+            "employee_id": "INF-HR-9012",
+            "is_verified": True,
+            "mou_reference_no": "VFSTR-MOU-INF-2024",
+            "mou_valid_from": "2024-01-01",
+            "mou_valid_till": "2027-12-31",
+            "mou_category": "Specialist Programmer Initiative",
+            "mou_status": "ACTIVE"
+        },
+        {
+            "name": "Cognizant",
+            "domain": "cognizant.com",
+            "website": "https://cognizant.com",
+            "recruiter_name": "Rohan Mehra",
+            "email": "campus@cognizant.com",
+            "designation": "University Lead",
+            "employee_id": "CTS-UR-3108",
+            "is_verified": False,
+            "mou_reference_no": "VFSTR-MOU-CTS-2021",
+            "mou_valid_from": "2021-05-01",
+            "mou_valid_till": "2024-04-30",
+            "mou_category": "Campus Recruitment & Skill Training",
+            "mou_status": "EXPIRED" # Demonstrates expired MOU scenario
+        }
     ]
 
     company_objs = {}
     recruiter_objs = {}
     for c in companies_data:
-        comp = Company(name=c["name"], domain=c["domain"], website=c["website"], is_verified=c.get("is_verified", False))
+        comp = Company(
+            name=c["name"],
+            domain=c["domain"],
+            website=c["website"],
+            is_verified=c["is_verified"],
+            mou_reference_no=c["mou_reference_no"],
+            mou_valid_from=c["mou_valid_from"],
+            mou_valid_till=c["mou_valid_till"],
+            mou_category=c["mou_category"],
+            mou_status=c["mou_status"]
+        )
         db.add(comp)
         db.commit()
         db.refresh(comp)
         company_objs[c["name"]] = comp
 
-        rec_user = User(identifier=c["email"], email=c["email"], hashed_password=default_pw, role="recruiter", full_name=c["recruiter_name"])
+        rec_user = User(
+            identifier=c["email"],
+            email=c["email"],
+            hashed_password=default_pw,
+            role="recruiter",
+            full_name=c["recruiter_name"]
+        )
         db.add(rec_user)
         db.commit()
         db.refresh(rec_user)
@@ -67,14 +138,14 @@ def seed_database(force_recreate: bool = False):
             official_email=c["email"],
             employee_id=c["employee_id"],
             invitation_code="VFSTR-RECRUIT-2026",
-            is_verified=True
+            is_verified=c["is_verified"]
         )
         db.add(rec_prof)
         db.commit()
         db.refresh(rec_prof)
         recruiter_objs[c["name"]] = rec_prof
 
-    # 3. Job Postings with recruiter-selected academic years
+    # 3. Job Postings: 3 Active, 1 Pending Dean Approval (for demo)
     jobs_data = [
         {
             "company": "Amazon",
@@ -88,7 +159,8 @@ def seed_database(force_recreate: bool = False):
             "required_skills": ["Python", "Java", "Data Structures", "Algorithms", "SQL", "System Design"],
             "eligible_years": [4],
             "target_role": "Software Development Engineer (SDE)",
-            "deadline": "2026-11-20"
+            "deadline": "2026-11-20",
+            "status": "ACTIVE"
         },
         {
             "company": "TCS",
@@ -102,21 +174,8 @@ def seed_database(force_recreate: bool = False):
             "required_skills": ["Python", "SQL", "FastAPI", "React", "Git"],
             "eligible_years": [4],
             "target_role": "Full-Stack Web Developer",
-            "deadline": "2026-11-25"
-        },
-        {
-            "company": "Infosys",
-            "title": "Specialist Programmer (SP)",
-            "description": "Advanced competitive coding, algorithmic optimization, and backend engineering.",
-            "job_type": "Full-Time",
-            "ctc_lpa": 9.5,
-            "min_cgpa": 7.5,
-            "max_backlogs": 0,
-            "eligible_branches": ["CSE", "IT", "AI_DS"],
-            "required_skills": ["C++", "Java", "Data Structures", "Algorithms"],
-            "eligible_years": [4],
-            "target_role": "Software Development Engineer (SDE)",
-            "deadline": "2026-12-01"
+            "deadline": "2026-11-25",
+            "status": "ACTIVE"
         },
         {
             "company": "Amazon",
@@ -130,7 +189,23 @@ def seed_database(force_recreate: bool = False):
             "required_skills": ["Python", "Machine Learning", "PyTorch", "SQL"],
             "eligible_years": [3],
             "target_role": "AI & Machine Learning Engineer",
-            "deadline": "2026-11-30"
+            "deadline": "2026-11-30",
+            "status": "ACTIVE"
+        },
+        {
+            "company": "Cognizant",
+            "title": "GenC Next Developer (Cloud & Microservices)",
+            "description": "Development of enterprise microservices and event-driven architectures.",
+            "job_type": "Full-Time",
+            "ctc_lpa": 6.75,
+            "min_cgpa": 6.5,
+            "max_backlogs": 0,
+            "eligible_branches": ["CSE", "IT", "AI_DS", "ECE"],
+            "required_skills": ["Java", "Spring Boot", "SQL", "Git"],
+            "eligible_years": [4],
+            "target_role": "Full-Stack Web Developer",
+            "deadline": "2026-12-15",
+            "status": "PENDING_DEAN_APPROVAL" # Demonstrates Dean Approval & MOU renewal gate
         }
     ]
 
@@ -152,14 +227,14 @@ def seed_database(force_recreate: bool = False):
             eligible_years_json=json.dumps(jd["eligible_years"]),
             target_role_category=jd["target_role"],
             deadline=jd["deadline"],
-            status="ACTIVE"
+            status=jd["status"]
         )
         db.add(job)
         db.commit()
         db.refresh(job)
         job_objs.append(job)
 
-    # 4. Standard Pre-Configured Sample Students (for instant login & evaluation)
+    # 4. Standard Pre-Configured Sample Students
     sample_students = [
         {
             "reg_no": "231FA05001",
@@ -171,6 +246,16 @@ def seed_database(force_recreate: bool = False):
             "target_role": "Software Development Engineer (SDE)",
             "target_company": "Amazon",
             "skills": ["Python", "Java", "Data Structures", "Algorithms", "SQL", "System Design", "FastAPI", "React", "Git"],
+            "honors": ["Dean's Merit Scholar 2024", "Specialization in Distributed Systems"],
+            "certifications": ["AWS Certified Cloud Practitioner", "Oracle Certified Java Associate"],
+            "semesters": [
+                {"sem": 1, "sgpa": 8.50, "cgpa": 8.50, "backlogs": 0, "cleared": True},
+                {"sem": 2, "sgpa": 8.70, "cgpa": 8.60, "backlogs": 0, "cleared": True},
+                {"sem": 3, "sgpa": 8.90, "cgpa": 8.70, "backlogs": 1, "cleared": True, "note": "Cleared Math-III in Supplementary (Nov 2024)"},
+                {"sem": 4, "sgpa": 9.05, "cgpa": 8.79, "backlogs": 0, "cleared": True},
+                {"sem": 5, "sgpa": 8.95, "cgpa": 8.82, "backlogs": 0, "cleared": True},
+                {"sem": 6, "sgpa": 8.92, "cgpa": 8.85, "backlogs": 0, "cleared": True}
+            ],
             "resume_text": """Rahul Sharma
 231fa05001@vignan.ac.in | +91 9876543210 | Guntur, AP | linkedin.com/in/rahulsharma | github.com/rahulsharma
 
@@ -211,6 +296,14 @@ CERTIFICATIONS & ACHIEVEMENTS
             "target_role": "AI & Machine Learning Engineer",
             "target_company": "Amazon",
             "skills": ["Python", "Machine Learning", "PyTorch", "SQL", "Data Structures", "Git"],
+            "honors": ["AI Research Merit Scholar"],
+            "certifications": ["TensorFlow Developer Certificate"],
+            "semesters": [
+                {"sem": 1, "sgpa": 8.20, "cgpa": 8.20, "backlogs": 0, "cleared": True},
+                {"sem": 2, "sgpa": 8.40, "cgpa": 8.30, "backlogs": 0, "cleared": True},
+                {"sem": 3, "sgpa": 8.50, "cgpa": 8.37, "backlogs": 0, "cleared": True},
+                {"sem": 4, "sgpa": 8.45, "cgpa": 8.40, "backlogs": 0, "cleared": True}
+            ],
             "resume_text": """Priya Nair
 241fa05001@vignan.ac.in | +91 9123456780 | Vadlamudi, AP | linkedin.com/in/priyanair | github.com/priyanair
 
@@ -247,7 +340,6 @@ Vision-Based Quality Inspection | Python, PyTorch, OpenCV
         db.refresh(s_user)
 
         ats_eval = calculate_ats_score(s["resume_text"], s["skills"])
-        # In 2026, 231 batch B.Tech is 4th Year, 241 batch B.Tech is 3rd Year
         start_yr = int("20" + s["reg_no"][:2])
         profile = StudentProfile(
             user_id=s_user.id,
@@ -262,17 +354,105 @@ Vision-Based Quality Inspection | Python, PyTorch, OpenCV
             skills_json=json.dumps(s["skills"]),
             resume_text=s["resume_text"],
             ats_score=ats_eval.get("ats_score", 82),
-            ats_feedback_json=json.dumps(ats_eval.get("feedback", [])),
+            ats_feedback_json=json.dumps(ats_eval.get("recommendations", [])),
             target_role=s["target_role"],
             target_company=s["target_company"],
-            placement_status="UNPLACED"
+            placement_status="UNPLACED",
+            honors_json=json.dumps(s.get("honors", [])),
+            certifications_json=json.dumps(s.get("certifications", []))
         )
         db.add(profile)
         db.commit()
         db.refresh(profile)
 
-    print("Database initialized successfully with sample accounts (Admin, Recruiters, and Verified Students)!")
-    db.commit()
+        # Seed Semester Records
+        for sem in s.get("semesters", []):
+            sem_rec = AcademicSemesterRecord(
+                student_id=profile.id,
+                semester_num=sem["sem"],
+                sgpa=sem["sgpa"],
+                cgpa_at_sem=sem["cgpa"],
+                credits_earned=22,
+                backlogs_in_sem=sem["backlogs"],
+                is_cleared=sem["cleared"],
+                cleared_date=sem.get("note", None)
+            )
+            db.add(sem_rec)
+
+    # 5. Seed Applications and an Interview slot for Rahul Sharma with Amazon SDE-1
+    amazon_sde = db.query(JobPosting).filter(JobPosting.title.like("%SDE-1%")).first()
+    rahul_prof = db.query(StudentProfile).filter(StudentProfile.reg_no == "231FA05001").first()
+
+    if amazon_sde and rahul_prof:
+        appl = Application(
+            student_id=rahul_prof.id,
+            job_id=amazon_sde.id,
+            status="Shortlisted (Slot Confirmed)",
+            match_score=92,
+            is_eligible=True,
+            eligibility_reason="Eligible: Meets all academic & institutional criteria",
+            missing_skills_json="[]"
+        )
+        db.add(appl)
+        db.commit()
+        db.refresh(appl)
+
+        # Schedule Interview Slot
+        slot = InterviewSchedule(
+            application_id=appl.id,
+            job_id=amazon_sde.id,
+            student_id=rahul_prof.id,
+            block_name="A Block",
+            chamber_name="Chamber A-204 (Interview Panel 1)",
+            slot_date="2026-11-20",
+            slot_time="10:30 AM - 11:00 AM",
+            panel_name="Panel 1 (Technical & Coding)",
+            status="CONFIRMED"
+        )
+        db.add(slot)
+
+        # Seed Drive Attendance (Stage attendance: PPT and Technical Interview)
+        att1 = DriveAttendance(
+            job_id=amazon_sde.id,
+            student_id=rahul_prof.id,
+            event_type="PPT",
+            status="PRESENT",
+            verified_by="T&P Verification Desk",
+            hall_ticket_scan_hash=f"VFSTR-{rahul_prof.reg_no}-PPT-2026"
+        )
+        att2 = DriveAttendance(
+            job_id=amazon_sde.id,
+            student_id=rahul_prof.id,
+            event_type="TECHNICAL_INTERVIEW",
+            status="PRESENT",
+            verified_by="Panel 1 In-Charge",
+            hall_ticket_scan_hash=f"VFSTR-{rahul_prof.reg_no}-TECH-2026"
+        )
+        db.add_all([att1, att2])
+
+        # Seed Notifications for student
+        n1 = Notification(
+            user_id=rahul_prof.user_id,
+            title="🎯 Application Received: Amazon SDE-1",
+            message="Your application for SDE-1 at Amazon was received.",
+            is_read=False
+        )
+        n2 = Notification(
+            user_id=rahul_prof.user_id,
+            title="🎉 Shortlisted for Amazon SDE-1!",
+            message="Amazon shortlisted your profile. Your interview pass has been generated.",
+            is_read=False
+        )
+        n3 = Notification(
+            user_id=rahul_prof.user_id,
+            title="📅 Interview Pass Confirmed: Amazon",
+            message="Your slot: 2026-11-20 at 10:30 AM in A Block (Chamber A-204).",
+            is_read=False
+        )
+        db.add_all([n1, n2, n3])
+        db.commit()
+
+    print("Database seeded successfully with MOUs, academic semesters, stage attendance, and real notifications!")
     db.close()
 
 if __name__ == "__main__":

@@ -1,13 +1,16 @@
 import os
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.database.session import get_db
-from app.models.all_models import User, StudentProfile, RecruiterProfile, Company
-from app.core.security import verify_password, get_password_hash, create_access_token
+from app.models.all_models import User, StudentProfile, RecruiterProfile, Company, Notification
+from app.core.security import verify_password, get_password_hash, create_access_token, require_authenticated_payload
 from app.core.config import ADMIN_INVITATION_KEY, RECRUITER_INVITATION_CODE, ENABLE_DEMO_LOGIN, APP_ENV
 from app.ai_engine.year_calculator import parse_vfstr_reg_no
+from app.core.events import broadcaster
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Security"])
 
@@ -403,3 +406,113 @@ def get_demo_personas(db: Session = Depends(get_db)):
 
     # Note: Admin persona is deliberately NOT issued via public demo token to prevent unauthorized institutional takeover.
     return personas
+
+@router.get("/me")
+def get_current_user_profile(payload: dict = Depends(require_authenticated_payload), db: Session = Depends(get_db)):
+    """Session Rehydration: Restores user session, permissions, and active profile on page refresh."""
+    user_id = int(payload.get("sub", 0))
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User account not found")
+
+    token = create_access_token({"sub": str(user.id), "role": user.role, "identifier": user.identifier})
+
+    if user.role == "student" and user.student_profile:
+        sp = user.student_profile
+        year_info = parse_vfstr_reg_no(sp.reg_no, sp.degree)
+        return {
+            "token": token,
+            "access_token": token,
+            "role": "student",
+            "full_name": user.full_name,
+            "user_id": user.id,
+            "profile_id": sp.id,
+            "reg_no": sp.reg_no,
+            "email": user.email,
+            "degree": sp.degree,
+            "branch": sp.branch,
+            "year": year_info["year_label"],
+            "batch": year_info["batch"]
+        }
+    elif user.role == "recruiter" and user.recruiter_profile:
+        rp = user.recruiter_profile
+        return {
+            "token": token,
+            "access_token": token,
+            "role": "recruiter",
+            "full_name": user.full_name,
+            "user_id": user.id,
+            "profile_id": rp.id,
+            "company_name": rp.company.name if rp.company else "Tech Company",
+            "employee_id": rp.employee_id,
+            "is_verified": rp.is_verified,
+            "email": user.email
+        }
+    elif user.role == "admin":
+        return {
+            "token": token,
+            "access_token": token,
+            "role": "admin",
+            "full_name": user.full_name,
+            "user_id": user.id,
+            "profile_id": None,
+            "email": user.email
+        }
+
+    return {
+        "token": token,
+        "access_token": token,
+        "role": user.role,
+        "full_name": user.full_name,
+        "user_id": user.id,
+        "profile_id": None,
+        "email": user.email
+    }
+
+@router.get("/notifications")
+def get_user_notifications(payload: dict = Depends(require_authenticated_payload), db: Session = Depends(get_db)):
+    """Fetches real unread/recent notifications for the authenticated user."""
+    user_id = int(payload.get("sub", 0))
+    notifs = db.query(Notification).filter(Notification.user_id == user_id).order_by(Notification.created_at.desc()).limit(30).all()
+    return [
+        {
+            "id": n.id,
+            "title": n.title,
+            "message": n.message,
+            "is_read": n.is_read,
+            "created_at": n.created_at.isoformat() if n.created_at else ""
+        }
+        for n in notifs
+    ]
+
+@router.post("/notifications/dismiss-all")
+def dismiss_all_notifications(payload: dict = Depends(require_authenticated_payload), db: Session = Depends(get_db)):
+    """Marks all notifications as read for current user."""
+    user_id = int(payload.get("sub", 0))
+    db.query(Notification).filter(Notification.user_id == user_id, Notification.is_read == False).update({"is_read": True})
+    db.commit()
+    return {"message": "All notifications marked as read", "status": "cleared"}
+
+@router.post("/notifications/clear")
+def clear_all_notifications(payload: dict = Depends(require_authenticated_payload), db: Session = Depends(get_db)):
+    """Completely empties notification drawer for current user."""
+    user_id = int(payload.get("sub", 0))
+    db.query(Notification).filter(Notification.user_id == user_id).delete()
+    db.commit()
+    return {"message": "Notification list cleared", "status": "cleared"}
+
+@router.get("/events/stream")
+async def sse_event_stream():
+    """Server-Sent Events (SSE) broadcast for instant updates (new drives, status changes, schedules)."""
+    async def event_generator():
+        queue = await broadcaster.subscribe()
+        try:
+            yield "event: ping\ndata: {}\n\n"
+            while True:
+                data = await queue.get()
+                yield f"data: {data}\n\n"
+        except asyncio.CancelledError:
+            broadcaster.unsubscribe(queue)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+

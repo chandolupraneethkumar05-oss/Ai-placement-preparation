@@ -6,6 +6,11 @@ export interface UserSession {
   profile_id?: number | null;
   reg_no?: string | null;
   email?: string | null;
+  degree?: string | null;
+  branch?: string | null;
+  year?: string | null;
+  batch?: string | null;
+  company_name?: string | null;
   year_info?: any;
 }
 
@@ -66,6 +71,9 @@ export interface JobCard {
   job_id: number;
   title: string;
   company: string;
+  mou_status?: string;
+  company_mou_ref?: string;
+  company_mou_status?: string;
   ctc_lpa: number;
   job_type: string;
   min_cgpa: number;
@@ -74,6 +82,12 @@ export interface JobCard {
   deadline: string;
   is_eligible: boolean;
   eligibility_reasons: string[];
+  eligibility_diagnostics?: {
+    cgpa?: { met: boolean; actual: number; required: number; gap: number };
+    backlogs?: { met: boolean; actual: number; allowed: number };
+    branch?: { met: boolean; student_branch: string; allowed_branches: string[] };
+    year?: { met: boolean; student_year_label: string; student_year_num: number; allowed_years: number[] };
+  };
   match_score: number;
   matched_skills: string[];
   missing_skills: string[];
@@ -261,3 +275,90 @@ export interface ATSScoreBreakdown {
   recommendations: string[];
   skills_extracted?: string[];
 }
+
+export interface NotificationItem {
+  id: number;
+  title: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface AcademicSemesterItem {
+  semester_num: number;
+  sgpa: number;
+  cgpa_at_sem: number;
+  credits_earned: number;
+  backlogs_in_sem: number;
+  is_cleared: boolean;
+  cleared_date?: string | null;
+}
+
+export interface StudentDossier {
+  student_id: number;
+  name: string;
+  reg_no: string;
+  degree: string;
+  branch: string;
+  overall_cgpa: number;
+  active_backlogs: number;
+  historical_backlogs_count: number;
+  total_credits_earned: number;
+  placement_status: string;
+  target_role: string;
+  ats_score: number;
+  skills: string[];
+  honors: string[];
+  certifications: string[];
+  semester_progression: AcademicSemesterItem[];
+  resume_text_available: boolean;
+}
+
+export interface DriveAttendanceItem {
+  id: number;
+  job_id: number;
+  job_title: string;
+  company_name: string;
+  event_type: string;
+  status: string;
+  check_in_time: string;
+  verified_by: string;
+  scan_hash?: string;
+}
+
+export interface PendingDriveItem {
+  id: number;
+  title: string;
+  company_id: number;
+  company_name: string;
+  domain: string;
+  mou_status: string;
+  mou_reference_no: string;
+  mou_valid_from: string;
+  mou_valid_till: string;
+  mou_category: string;
+  job_type: string;
+  ctc_lpa: number;
+  min_cgpa: number;
+  max_backlogs: number;
+  eligible_branches: string[];
+  eligible_years: number[];
+  deadline: string;
+  created_at: string;
+}
+
+export interface MOURegistryItem {
+  company_id: number;
+  company_name: string;
+  domain: string;
+  website: string;
+  is_verified: boolean;
+  mou_reference_no: string;
+  mou_category: string;
+  mou_valid_from: string;
+  mou_valid_till: string;
+  mou_status: string;
+  active_drives_count: number;
+  total_hired_students: number;
+}
+

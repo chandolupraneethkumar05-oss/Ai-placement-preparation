@@ -106,6 +106,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span>Resume Center & ATS</span>
               </button>
 
+              <button
+                onClick={() => onNavigate && onNavigate('attendance')}
+                className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition text-left ${
+                  activeNav === 'attendance' 
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30' 
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <CheckCircle2 size={16} className={activeNav === 'attendance' ? 'text-white' : 'text-purple-400'} />
+                <span>Drive Stage Attendance</span>
+              </button>
+
               <div className="pt-2 pb-1 px-3 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
                 Action Shortcuts
               </div>

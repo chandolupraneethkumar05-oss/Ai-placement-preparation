@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { UserSession, StudentProfile, JobCard, ApplicationItem } from '../types';
+import type { UserSession, StudentProfile, JobCard, ApplicationItem, DriveAttendanceItem } from '../types';
 import { 
   fetchStudentProfile, 
   uploadResumeFile, 
@@ -7,7 +7,9 @@ import {
   applyToJob, 
   fetchStudentApplications, 
   fetchRoadmap,
-  updateTargetRole
+  updateTargetRole,
+  fetchStudentAttendance,
+  API_BASE
 } from '../api';
 import { RoadmapModal } from '../components/RoadmapModal';
 import { TargetRoleModal } from '../components/TargetRoleModal';
@@ -38,8 +40,8 @@ import {
 
 interface Props {
   session: UserSession;
-  activeNavTab?: 'jobs' | 'applications' | 'resume';
-  onNavTabChange?: (tab: 'jobs' | 'applications' | 'resume') => void;
+  activeNavTab?: 'jobs' | 'applications' | 'resume' | 'attendance';
+  onNavTabChange?: (tab: 'jobs' | 'applications' | 'resume' | 'attendance') => void;
   triggerAssessment?: boolean;
   onCloseAssessmentTrigger?: () => void;
 }
@@ -54,9 +56,10 @@ export const StudentDashboard: React.FC<Props> = ({
   const [profile, setProfile] = useState<StudentProfile | null>(null);
   const [jobs, setJobs] = useState<JobCard[]>([]);
   const [applications, setApplications] = useState<ApplicationItem[]>([]);
+  const [attendanceList, setAttendanceList] = useState<DriveAttendanceItem[]>([]);
   const shortlistedApps = applications.filter(a => a.status.includes('Shortlisted') || a.status.includes('Confirmed'));
   const shortlistedCompanies = Array.from(new Set(shortlistedApps.map(a => a.company)));
-  const [activeTab, setActiveTab] = useState<'jobs' | 'applications' | 'resume'>(activeNavTab || 'jobs');
+  const [activeTab, setActiveTab] = useState<'jobs' | 'applications' | 'resume' | 'attendance'>(activeNavTab || 'jobs');
 
   useEffect(() => {
     if (activeNavTab) {
@@ -102,6 +105,9 @@ export const StudentDashboard: React.FC<Props> = ({
 
       const apps = await fetchStudentApplications(profileId);
       setApplications(apps);
+
+      const attRes = await fetchStudentAttendance(profileId).catch(() => ({ records: [] }));
+      setAttendanceList(attRes.records || []);
     } catch (e: any) {
       console.error(e);
     }
@@ -109,6 +115,25 @@ export const StudentDashboard: React.FC<Props> = ({
 
   useEffect(() => {
     loadData();
+  }, [profileId]);
+
+  // Real-time SSE updates for new published drives
+  useEffect(() => {
+    try {
+      const sseUrl = `${API_BASE}/auth/events/stream`;
+      const es = new EventSource(sseUrl);
+      es.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload && (payload.event === "new_drive_published" || payload.event === "drive_status_updated")) {
+            loadData();
+          }
+        } catch (_) {}
+      };
+      return () => {
+        es.close();
+      };
+    } catch (_) {}
   }, [profileId]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -306,7 +331,10 @@ export const StudentDashboard: React.FC<Props> = ({
       {/* Tabs */}
       <div className="flex border-b border-slate-200 space-x-4 sm:space-x-8 text-xs sm:text-sm overflow-x-auto">
         <button
-          onClick={() => setActiveTab('jobs')}
+          onClick={() => {
+            setActiveTab('jobs');
+            onNavTabChange?.('jobs');
+          }}
           className={`pb-3 font-bold flex items-center space-x-2 border-b-2 whitespace-nowrap transition ${
             activeTab === 'jobs' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
@@ -316,7 +344,10 @@ export const StudentDashboard: React.FC<Props> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab('applications')}
+          onClick={() => {
+            setActiveTab('applications');
+            onNavTabChange?.('applications');
+          }}
           className={`pb-3 font-bold flex items-center space-x-2 border-b-2 whitespace-nowrap transition ${
             activeTab === 'applications' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
@@ -326,13 +357,29 @@ export const StudentDashboard: React.FC<Props> = ({
         </button>
 
         <button
-          onClick={() => setActiveTab('resume')}
+          onClick={() => {
+            setActiveTab('resume');
+            onNavTabChange?.('resume');
+          }}
           className={`pb-3 font-bold flex items-center space-x-2 border-b-2 whitespace-nowrap transition ${
             activeTab === 'resume' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
           <FileText size={16} />
           <span>Resume Center ({hasResume ? `ATS: ${profile?.ats_score}` : 'Pending'})</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('attendance');
+            onNavTabChange?.('attendance');
+          }}
+          className={`pb-3 font-bold flex items-center space-x-2 border-b-2 whitespace-nowrap transition ${
+            activeTab === 'attendance' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <CheckCircle2 size={16} />
+          <span>Drive Stage Attendance ({attendanceList.length})</span>
         </button>
       </div>
 
@@ -359,7 +406,7 @@ export const StudentDashboard: React.FC<Props> = ({
                 <div className="space-y-3">
                   {/* Badges */}
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center space-x-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className="bg-slate-900 text-white text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider">
                         {job.company}
                       </span>
@@ -372,6 +419,15 @@ export const StudentDashboard: React.FC<Props> = ({
                       }`}>
                         {job.job_type || 'Full-Time'}
                       </span>
+                      {job.mou_status && (
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                          job.mou_status === 'ACTIVE' 
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}>
+                          {job.mou_status === 'ACTIVE' ? '✓ MOU Verified' : '⚠️ MOU In Renewal'}
+                        </span>
+                      )}
                     </div>
                     <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 text-xs font-black px-2.5 py-0.5 rounded-full">
                       ₹{job.ctc_lpa} LPA
@@ -403,6 +459,50 @@ export const StudentDashboard: React.FC<Props> = ({
                       <span className="text-[10px] text-slate-400">+{job.required_skills.length - 4} more</span>
                     )}
                   </div>
+
+                  {/* Itemized Eligibility Diagnostics if not eligible */}
+                  {!job.is_eligible && job.eligibility_diagnostics && (
+                    <div className="bg-rose-50/80 border border-rose-200 rounded-2xl p-3 space-y-1.5 mt-2">
+                      <div className="flex items-center space-x-1.5 text-rose-800 font-bold text-xs">
+                        <AlertCircle size={14} className="text-rose-600" />
+                        <span>Why Am I Ineligible?</span>
+                      </div>
+                      <div className="text-[11px] text-rose-900 space-y-1">
+                        {job.eligibility_diagnostics.cgpa && !job.eligibility_diagnostics.cgpa.met && (
+                          <div className="flex items-start space-x-1.5">
+                            <span className="text-rose-500 font-bold">•</span>
+                            <span>
+                              <strong>CGPA Shortfall:</strong> Required min {job.eligibility_diagnostics.cgpa.required} (You have {job.eligibility_diagnostics.cgpa.actual}, gap of {job.eligibility_diagnostics.cgpa.gap.toFixed(2)})
+                            </span>
+                          </div>
+                        )}
+                        {job.eligibility_diagnostics.backlogs && !job.eligibility_diagnostics.backlogs.met && (
+                          <div className="flex items-start space-x-1.5">
+                            <span className="text-rose-500 font-bold">•</span>
+                            <span>
+                              <strong>Active Backlogs:</strong> Allowed max {job.eligibility_diagnostics.backlogs.allowed} (You currently have {job.eligibility_diagnostics.backlogs.actual} active backlogs)
+                            </span>
+                          </div>
+                        )}
+                        {job.eligibility_diagnostics.branch && !job.eligibility_diagnostics.branch.met && (
+                          <div className="flex items-start space-x-1.5">
+                            <span className="text-rose-500 font-bold">•</span>
+                            <span>
+                              <strong>Branch Restriction:</strong> Open to {job.eligibility_diagnostics.branch.allowed_branches.join(", ")} (Your branch: {job.eligibility_diagnostics.branch.student_branch})
+                            </span>
+                          </div>
+                        )}
+                        {job.eligibility_diagnostics.year && !job.eligibility_diagnostics.year.met && (
+                          <div className="flex items-start space-x-1.5">
+                            <span className="text-rose-500 font-bold">•</span>
+                            <span>
+                              <strong>Academic Year:</strong> Open only to Year(s) {job.eligibility_diagnostics.year.allowed_years.join(", ")} (Your year: {job.eligibility_diagnostics.year.student_year_label})
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Footer Buttons */}
@@ -693,6 +793,90 @@ export const StudentDashboard: React.FC<Props> = ({
             </div>
           )}
 
+        </div>
+      )}
+
+      {/* TAB 4: PLACEMENT STAGE ATTENDANCE */}
+      {activeTab === 'attendance' && (
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900 tracking-tight flex items-center space-x-2">
+                <CheckCircle2 className="text-emerald-600" size={20} />
+                <span>Placement Drive Stage Attendance</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Official institutional verification of student presence at recruitment stages (PPT, Online Assessment, Technical Interview, HR Interview) via admit card/QR scan.
+              </p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <span className="bg-emerald-50 text-emerald-700 text-xs font-bold px-3 py-1 rounded-full border border-emerald-200">
+                {attendanceList.filter(a => a.status === 'PRESENT').length} Stages Verified
+              </span>
+            </div>
+          </div>
+
+          {attendanceList.length === 0 ? (
+            <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 text-slate-500 space-y-2">
+              <Clock size={36} className="mx-auto text-slate-300" />
+              <p className="font-bold text-slate-700">No placement stage attendance logs found.</p>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                Once you present your hall ticket / QR code at Pre-Placement Talks, Online Assessments, or Interview Panels, your verified stage attendance will be displayed here.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {attendanceList.map((record) => (
+                <div
+                  key={record.id}
+                  className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm space-y-3"
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                        {record.company_name}
+                      </span>
+                      <h4 className="font-bold text-slate-900 text-sm mt-1">{record.job_title}</h4>
+                    </div>
+                    <span
+                      className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full border uppercase tracking-wider ${
+                        record.status === 'PRESENT'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-rose-50 text-rose-700 border-rose-200'
+                      }`}
+                    >
+                      {record.status}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="text-slate-400 text-[10px] font-bold block uppercase">Stage</span>
+                      <span className="font-bold text-slate-800">{record.event_type}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 text-[10px] font-bold block uppercase">Check-in Timestamp</span>
+                      <span className="font-bold text-slate-800">
+                        {record.check_in_time
+                          ? new Date(record.check_in_time).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
+                          : 'Recorded'}
+                      </span>
+                    </div>
+                    <div className="col-span-2 pt-1 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-500">
+                        Desk: <strong className="text-slate-700">{record.verified_by}</strong>
+                      </span>
+                      {record.scan_hash && (
+                        <span className="text-[10px] font-mono text-slate-400">
+                          Token: {record.scan_hash.substring(0, 10)}...
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
